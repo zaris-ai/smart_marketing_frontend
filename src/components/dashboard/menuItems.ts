@@ -1,18 +1,18 @@
 import {
-  HomeIcon,
-  PencilIcon,
-  GlobeAltIcon,
-  SignalIcon,
-  HashtagIcon,
-  UsersIcon,
-  ListBulletIcon,
-  KeyIcon,
-  PencilSquareIcon,
   AtSymbolIcon,
+  GlobeAltIcon,
+  HashtagIcon,
+  HomeIcon,
+  KeyIcon,
+  ListBulletIcon,
+  PencilIcon,
+  PencilSquareIcon,
   QuestionMarkCircleIcon,
+  SignalIcon,
   UserMinusIcon,
+  UsersIcon,
 } from "@heroicons/react/24/outline";
-import { IconBuildingStore, IconFaceMaskFilled, IconImageInPicture, IconMail, IconVideo } from "@tabler/icons-react";
+import { IconBuildingStore, IconImageInPicture, IconMail, IconUpload, IconVideo } from "@tabler/icons-react";
 
 export interface MenuItem {
   label: string;
@@ -27,6 +27,12 @@ export const menuItems: MenuItem[] = [
     label: "Users",
     href: "/dashboard/users",
     icon: UsersIcon,
+    section: "setting",
+  },
+  {
+    label: "Uploader",
+    href: "/dashboard/uploader",
+    icon: IconUpload,
     section: "setting",
   },
   {

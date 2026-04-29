@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { ThemeToggle } from '@/components/common';
 import { useSession } from 'next-auth/react';
 
 export const LandingHeader: React.FC = () => {
@@ -52,7 +51,7 @@ export const LandingHeader: React.FC = () => {
           </Link>
 
           <div className="flex items-center gap-4">
-            <ThemeToggle />
+            
             {
               status === "authenticated" ?
                 <Link

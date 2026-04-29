@@ -2,7 +2,6 @@ import { ReactNode } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { ROUTES } from '@/config/constants';
-import { ThemeToggle } from '@/components/common';
 
 interface AuthLayoutProps {
   children: ReactNode;
@@ -25,7 +24,6 @@ const AuthLayout: React.FC<AuthLayoutProps> = ({
             <Link href={ROUTES.HOME} className="inline-block">
               <h1 className="text-3xl font-bold text-primary dark:text-blue-400">Arka</h1>
             </Link>
-            <ThemeToggle />
           </div>
 
           <div className="mb-8 text-left">
