@@ -1,0 +1,29 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_BASE_URL=https://api.smart.arkaanalyzer.com/api
+    container_name: atlas-web
+    restart: unless-stopped
+    ports:
+      - "10034:3000"
+    environment:
+      - NODE_ENV=production
+      - API_BASE_URL=https://api.smart.arkaanalyzer.com/api
+      - NEXT_PUBLIC_API_BASE_URL=https://api.smart.arkaanalyzer.com/api
+      - NEXTAUTH_URL=https://smart.arkaanalyzer.com
+      - NEXTAUTH_SECRET=1223
+    networks:
+      - atlas-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  atlas-network:
+    driver: bridge
