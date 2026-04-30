@@ -1,4 +1,7 @@
 import { DashboardLayout } from '@/components/layouts';
+import Pagination, {
+  type PaginationMeta,
+} from '@/components/common/Pagination';
 import { Input } from '@/components/ui';
 import api from '@/lib/axios';
 import { withAuth } from '@/utils';
@@ -6,9 +9,6 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import Pagination, {
-  type PaginationMeta,
-} from '@/components/common/Pagination';
 
 type Store = {
   _id: string;
@@ -20,6 +20,8 @@ type Store = {
   contactEmail?: string;
   notes?: string;
   isActive: boolean;
+  isChecked?: boolean;
+  checkedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -32,6 +34,7 @@ type StoreFormData = {
   contactEmail: string;
   notes: string;
   isActive: boolean;
+  isChecked: boolean;
 };
 
 type ReplaceImportResult = {
@@ -47,6 +50,17 @@ type ReplaceImportResult = {
   }[];
 };
 
+type FetchStoresOptions = {
+  query?: string;
+  page?: number;
+  limit?: number;
+  activeFilter?: string;
+  checkedFilter?: string;
+  countryFilter?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+};
+
 const defaultFormValues: StoreFormData = {
   name: '',
   domain: '',
@@ -55,6 +69,7 @@ const defaultFormValues: StoreFormData = {
   contactEmail: '',
   notes: '',
   isActive: true,
+  isChecked: false,
 };
 
 const StoresPage = () => {
@@ -63,16 +78,25 @@ const StoresPage = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [stores, setStores] = useState<Store[]>([]);
+  const [pagination, setPagination] = useState<PaginationMeta | null>(null);
+
   const [isListLoading, setIsListLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [listError, setListError] = useState('');
-  const [search, setSearch] = useState('');
-  const [deletingId, setDeletingId] = useState('');
-  const [editingStore, setEditingStore] = useState<Store | null>(null);
 
-  const [pagination, setPagination] = useState<PaginationMeta | null>(null);
+  const [search, setSearch] = useState('');
+  const [activeFilter, setActiveFilter] = useState('');
+  const [checkedFilter, setCheckedFilter] = useState('');
+  const [countryFilter, setCountryFilter] = useState('');
+  const [sortBy, setSortBy] = useState('createdAt');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
+
+  const [deletingId, setDeletingId] = useState('');
+  const [checkingId, setCheckingId] = useState('');
+  const [editingStore, setEditingStore] = useState<Store | null>(null);
 
   const [jsonFile, setJsonFile] = useState<File | null>(null);
   const [isReplacing, setIsReplacing] = useState(false);
@@ -89,11 +113,16 @@ const StoresPage = () => {
     defaultValues: defaultFormValues,
   });
 
-  const fetchStores = async (
-    query = search,
-    nextPage = page,
-    nextLimit = limit
-  ) => {
+  const fetchStores = async (options: FetchStoresOptions = {}) => {
+    const nextSearch = options.query ?? search;
+    const nextPage = options.page ?? page;
+    const nextLimit = options.limit ?? limit;
+    const nextActiveFilter = options.activeFilter ?? activeFilter;
+    const nextCheckedFilter = options.checkedFilter ?? checkedFilter;
+    const nextCountryFilter = options.countryFilter ?? countryFilter;
+    const nextSortBy = options.sortBy ?? sortBy;
+    const nextSortOrder = options.sortOrder ?? sortOrder;
+
     try {
       setListError('');
 
@@ -101,7 +130,16 @@ const StoresPage = () => {
         params: {
           page: nextPage,
           limit: nextLimit,
-          ...(query ? { q: query } : {}),
+          ...(nextSearch ? { q: nextSearch } : {}),
+          ...(nextActiveFilter !== ''
+            ? { isActive: nextActiveFilter === 'true' }
+            : {}),
+          ...(nextCheckedFilter !== ''
+            ? { isChecked: nextCheckedFilter === 'true' }
+            : {}),
+          ...(nextCountryFilter ? { country: nextCountryFilter } : {}),
+          sortBy: nextSortBy,
+          sortOrder: nextSortOrder,
         },
       });
 
@@ -122,7 +160,17 @@ const StoresPage = () => {
   };
 
   useEffect(() => {
-    fetchStores('', 1, limit);
+    fetchStores({
+      query: '',
+      page: 1,
+      limit,
+      activeFilter: '',
+      checkedFilter: '',
+      countryFilter: '',
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const openCreateModal = () => {
@@ -145,6 +193,7 @@ const StoresPage = () => {
       contactEmail: store.contactEmail || '',
       notes: store.notes || '',
       isActive: Boolean(store.isActive),
+      isChecked: Boolean(store.isChecked),
     });
 
     editModalRef.current?.showModal();
@@ -165,10 +214,14 @@ const StoresPage = () => {
         contactEmail: data.contactEmail,
         notes: data.notes,
         isActive: data.isActive,
+        isChecked: data.isChecked,
       });
 
       toast.success(response?.data?.message || 'Store created successfully.');
-      await fetchStores(search);
+
+      setPage(1);
+      await fetchStores({ page: 1 });
+
       closeCreateModal();
     } catch (error: any) {
       const message =
@@ -193,10 +246,13 @@ const StoresPage = () => {
         contactEmail: data.contactEmail,
         notes: data.notes,
         isActive: data.isActive,
+        isChecked: data.isChecked,
       });
 
       toast.success(response?.data?.message || 'Store updated successfully.');
-      await fetchStores(search);
+
+      await fetchStores({ page, limit });
+
       closeEditModal();
     } catch (error: any) {
       const message =
@@ -217,7 +273,12 @@ const StoresPage = () => {
       const response = await api.delete(`/stores/${store._id}`);
 
       toast.success(response?.data?.message || 'Store deleted successfully.');
-      await fetchStores(search);
+
+      const shouldGoBackOnePage = stores.length === 1 && page > 1;
+      const nextPage = shouldGoBackOnePage ? page - 1 : page;
+
+      setPage(nextPage);
+      await fetchStores({ page: nextPage, limit });
     } catch (error: any) {
       const message =
         error?.response?.data?.error ||
@@ -244,26 +305,75 @@ const StoresPage = () => {
       },
       cancel: {
         label: 'Cancel',
-        onClick: () => { },
+        onClick: () => {},
       },
       duration: 10000,
     });
   };
 
-  const handleSearch = async (e: React.FormEvent) => {
+  const toggleStoreChecked = async (store: Store) => {
+    try {
+      setCheckingId(store._id);
+
+      const nextChecked = !store.isChecked;
+
+      await api.patch(`/stores/${store._id}`, {
+        isChecked: nextChecked,
+      });
+
+      toast.success(
+        nextChecked ? 'Store marked as checked.' : 'Store unchecked.'
+      );
+
+      await fetchStores({ page, limit });
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        'Failed to update checked status.';
+
+      toast.error(message);
+    } finally {
+      setCheckingId('');
+    }
+  };
+
+  const handleApplyFilters = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    setIsRefreshing(true);
     setPage(1);
+    setIsRefreshing(true);
 
-    await fetchStores(search, 1, limit);
+    await fetchStores({ page: 1, limit });
+  };
+
+  const handleResetFilters = async () => {
+    setSearch('');
+    setActiveFilter('');
+    setCheckedFilter('');
+    setCountryFilter('');
+    setSortBy('createdAt');
+    setSortOrder('desc');
+    setPage(1);
+    setIsRefreshing(true);
+
+    await fetchStores({
+      query: '',
+      page: 1,
+      limit,
+      activeFilter: '',
+      checkedFilter: '',
+      countryFilter: '',
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
   };
 
   const handlePageChange = async (nextPage: number) => {
     setPage(nextPage);
     setIsRefreshing(true);
 
-    await fetchStores(search, nextPage, limit);
+    await fetchStores({ page: nextPage, limit });
   };
 
   const handleLimitChange = async (nextLimit: number) => {
@@ -271,7 +381,10 @@ const StoresPage = () => {
     setPage(1);
     setIsRefreshing(true);
 
-    await fetchStores(search, 1, nextLimit);
+    await fetchStores({
+      page: 1,
+      limit: nextLimit,
+    });
   };
 
   const handleReplaceFromJson = async () => {
@@ -286,7 +399,7 @@ const StoresPage = () => {
     }
 
     const confirmed = window.confirm(
-      'This will replace all existing stores with the uploaded JSON file. Existing stores will be removed after the new file is imported successfully. Continue?'
+      'This will replace all existing stores with the uploaded JSON file. Existing stores will be removed only after the new file is imported successfully. Continue?'
     );
 
     if (!confirmed) return;
@@ -320,12 +433,13 @@ const StoresPage = () => {
       );
 
       setJsonFile(null);
+      setPage(1);
 
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
 
-      await fetchStores(search);
+      await fetchStores({ page: 1, limit });
     } catch (error: any) {
       const message =
         error?.response?.data?.error ||
@@ -351,8 +465,10 @@ const StoresPage = () => {
                   <h1 className="text-2xl font-semibold text-base-content">
                     Stores
                   </h1>
+
                   <p className="mt-2 text-sm text-base-content/70">
-                    Manage Shopify stores from one place.
+                    Manage Shopify stores, CRM workflow status, filters and JSON
+                    imports.
                   </p>
                 </div>
 
@@ -371,11 +487,13 @@ const StoresPage = () => {
                     <h2 className="text-lg font-semibold text-base-content">
                       Replace Stores from JSON
                     </h2>
+
                     <p className="mt-1 text-sm text-base-content/70">
-                      Upload a large JSON array. The server will stream the file,
-                      customize fields for your Store database, then replace the
-                      current stores collection after successful import.
+                      Upload a large JSON array. The server streams the file,
+                      customizes fields for your Store database, then replaces
+                      the current stores collection after successful import.
                     </p>
+
                     <p className="mt-2 text-sm font-medium text-error">
                       Warning: this action replaces all existing stores.
                     </p>
@@ -404,8 +522,9 @@ const StoresPage = () => {
 
                   <button
                     type="button"
-                    className={`btn btn-error ${isReplacing ? 'btn-disabled' : ''
-                      }`}
+                    className={`btn btn-error ${
+                      isReplacing ? 'btn-disabled' : ''
+                    }`}
                     onClick={handleReplaceFromJson}
                   >
                     {isReplacing ? 'Replacing...' : 'Replace Stores'}
@@ -427,6 +546,7 @@ const StoresPage = () => {
                       <span>Uploading</span>
                       <span>{uploadProgress}%</span>
                     </div>
+
                     <progress
                       className="progress progress-error w-full"
                       value={uploadProgress}
@@ -501,6 +621,7 @@ const StoresPage = () => {
                           <th>Reason</th>
                         </tr>
                       </thead>
+
                       <tbody>
                         {replaceResult.invalidRows.map((row, index) => (
                           <tr key={`${row.row}-${index}`}>
@@ -515,47 +636,125 @@ const StoresPage = () => {
                 ) : null}
               </div>
 
-              <form
-                onSubmit={handleSearch}
-                className="mb-6 flex flex-col gap-3 md:flex-row"
-              >
-                <div className="flex-1">
-                  <Input
-                    value={search}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setSearch(e.target.value)
-                    }
-                    type="text"
-                    label="Search"
-                    placeholder="Search by name, domain, country, or email"
-                    dir="ltr"
-                  />
-                </div>
+              <div className="mb-6 rounded-2xl border border-base-300 bg-base-200/40 p-5">
+                <form
+                  onSubmit={handleApplyFilters}
+                  className="grid grid-cols-1 gap-4 md:grid-cols-6"
+                >
+                  <div className="md:col-span-2">
+                    <Input
+                      value={search}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                        setSearch(e.target.value)
+                      }
+                      type="text"
+                      label="Search"
+                      placeholder="Search by name, domain, country, or email"
+                      dir="ltr"
+                    />
+                  </div>
 
-                <div className="flex items-end gap-2">
-                  <button
-                    type="submit"
-                    className={`btn btn-outline ${isRefreshing ? 'btn-disabled' : ''
+                  <div className="form-control">
+                    <label className="label">
+                      <span className="label-text">Active</span>
+                    </label>
+
+                    <select
+                      className="select select-bordered"
+                      value={activeFilter}
+                      onChange={(e) => setActiveFilter(e.target.value)}
+                    >
+                      <option value="">All</option>
+                      <option value="true">Active</option>
+                      <option value="false">Inactive</option>
+                    </select>
+                  </div>
+
+                  <div className="form-control">
+                    <label className="label">
+                      <span className="label-text">Checked</span>
+                    </label>
+
+                    <select
+                      className="select select-bordered"
+                      value={checkedFilter}
+                      onChange={(e) => setCheckedFilter(e.target.value)}
+                    >
+                      <option value="">All</option>
+                      <option value="true">Checked</option>
+                      <option value="false">Not checked</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Input
+                      value={countryFilter}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                        setCountryFilter(e.target.value)
+                      }
+                      type="text"
+                      label="Country"
+                      placeholder="Canada"
+                      dir="ltr"
+                    />
+                  </div>
+
+                  <div className="form-control">
+                    <label className="label">
+                      <span className="label-text">Sort By</span>
+                    </label>
+
+                    <select
+                      className="select select-bordered"
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value)}
+                    >
+                      <option value="createdAt">Created</option>
+                      <option value="updatedAt">Updated</option>
+                      <option value="checkedAt">Checked Date</option>
+                      <option value="name">Name</option>
+                      <option value="domain">Domain</option>
+                      <option value="country">Country</option>
+                    </select>
+                  </div>
+
+                  <div className="form-control">
+                    <label className="label">
+                      <span className="label-text">Order</span>
+                    </label>
+
+                    <select
+                      className="select select-bordered"
+                      value={sortOrder}
+                      onChange={(e) =>
+                        setSortOrder(e.target.value as 'asc' | 'desc')
+                      }
+                    >
+                      <option value="desc">Descending</option>
+                      <option value="asc">Ascending</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-end gap-2 md:col-span-6">
+                    <button
+                      type="submit"
+                      className={`btn btn-outline ${
+                        isRefreshing ? 'btn-disabled' : ''
                       }`}
-                  >
-                    {isRefreshing ? 'Searching...' : 'Search'}
-                  </button>
+                    >
+                      {isRefreshing ? 'Filtering...' : 'Apply Filters'}
+                    </button>
 
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={async () => {
-                      setSearch('');
-                      setPage(1);
-                      setIsRefreshing(true);
-
-                      await fetchStores('', 1, limit);
-                    }}
-                  >
-                    Reset
-                  </button>
-                </div>
-              </form>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={handleResetFilters}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </form>
+              </div>
 
               {listError && (
                 <div className="alert alert-error mb-5">
@@ -572,80 +771,127 @@ const StoresPage = () => {
                   <h2 className="text-lg font-medium text-base-content">
                     No stores found
                   </h2>
+
                   <p className="mt-2 text-sm text-base-content/70">
-                    Create the first store or replace stores from JSON.
+                    Create the first store, import JSON, or adjust filters.
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto rounded-2xl border border-base-300">
-                  <table className="table table-zebra">
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>Domain</th>
-                        <th>Country</th>
-                        <th>Contact Name</th>
-                        <th>Contact Email</th>
-                        <th>Status</th>
-                        <th className="text-right">Actions</th>
-                      </tr>
-                    </thead>
-
-                    <tbody>
-                      {stores.map((store) => (
-                        <tr key={store._id}>
-                          <td className="font-medium">{store.name}</td>
-                          <td>{store.domain}</td>
-                          <td>{store.country || '-'}</td>
-                          <td>{store.contactName || '-'}</td>
-                          <td>{store.contactEmail || '-'}</td>
-                          <td>
-                            {store.isActive ? (
-                              <span className="badge badge-success badge-outline">
-                                Active
-                              </span>
-                            ) : (
-                              <span className="badge badge-ghost">
-                                Inactive
-                              </span>
-                            )}
-                          </td>
-                          <td className="text-right">
-                            <div className="flex justify-end gap-2">
-                              <Link
-                                href={{
-                                  pathname: '/dashboard/outreach',
-                                  query: { storeId: store._id },
-                                }}
-                                className="btn btn-sm btn-success btn-outline"
-                              >
-                                Outreach
-                              </Link>
-
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-outline"
-                                onClick={() => openEditModal(store)}
-                              >
-                                Edit
-                              </button>
-
-                              <button
-                                type="button"
-                                className={`btn btn-sm btn-error btn-outline ${deletingId === store._id ? 'btn-disabled' : ''
-                                  }`}
-                                onClick={() => handleDeleteStore(store)}
-                              >
-                                {deletingId === store._id
-                                  ? 'Deleting...'
-                                  : 'Delete'}
-                              </button>
-                            </div>
-                          </td>
+                <div className="overflow-hidden rounded-2xl border border-base-300">
+                  <div className="overflow-x-auto">
+                    <table className="table table-zebra">
+                      <thead>
+                        <tr>
+                          <th>Checked</th>
+                          <th>Name</th>
+                          <th>Domain</th>
+                          <th>Country</th>
+                          <th>Contact Name</th>
+                          <th>Contact Email</th>
+                          <th>Status</th>
+                          <th className="text-right">Actions</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+
+                      <tbody>
+                        {stores.map((store) => (
+                          <tr key={store._id}>
+                            <td>
+                              <label className="label cursor-pointer justify-start gap-2">
+                                <input
+                                  type="checkbox"
+                                  className="checkbox checkbox-primary checkbox-sm"
+                                  checked={Boolean(store.isChecked)}
+                                  disabled={checkingId === store._id}
+                                  onChange={() => toggleStoreChecked(store)}
+                                />
+
+                                {store.isChecked ? (
+                                  <span className="badge badge-info badge-outline">
+                                    Checked
+                                  </span>
+                                ) : (
+                                  <span className="badge badge-ghost">No</span>
+                                )}
+                              </label>
+                            </td>
+
+                            <td className="font-medium">{store.name}</td>
+
+                            <td>{store.domain}</td>
+
+                            <td>{store.country || '-'}</td>
+
+                            <td>{store.contactName || '-'}</td>
+
+                            <td>{store.contactEmail || '-'}</td>
+
+                            <td>
+                              {store.isActive ? (
+                                <span className="badge badge-success badge-outline">
+                                  Active
+                                </span>
+                              ) : (
+                                <span className="badge badge-ghost">
+                                  Inactive
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="text-right">
+                              <div className="flex justify-end gap-2">
+                                <Link
+                                  href={{
+                                    pathname: '/dashboard/outreach',
+                                    query: { storeId: store._id },
+                                  }}
+                                  className="btn btn-sm btn-success btn-outline"
+                                >
+                                  Outreach
+                                </Link>
+
+                                <Link
+                                  href={`/dashboard/stores/${store._id}/crm`}
+                                  className="btn btn-sm btn-info btn-outline"
+                                >
+                                  CRM
+                                </Link>
+
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-outline"
+                                  onClick={() => openEditModal(store)}
+                                >
+                                  Edit
+                                </button>
+
+                                <button
+                                  type="button"
+                                  className={`btn btn-sm btn-error btn-outline ${
+                                    deletingId === store._id
+                                      ? 'btn-disabled'
+                                      : ''
+                                  }`}
+                                  onClick={() => handleDeleteStore(store)}
+                                >
+                                  {deletingId === store._id
+                                    ? 'Deleting...'
+                                    : 'Delete'}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <Pagination
+                    pagination={pagination}
+                    isLoading={isRefreshing || isListLoading}
+                    onPageChange={handlePageChange}
+                    onLimitChange={handleLimitChange}
+                  />
                 </div>
               )}
             </div>
@@ -659,6 +905,7 @@ const StoresPage = () => {
                 <h3 className="text-xl font-semibold text-base-content">
                   Create Store
                 </h3>
+
                 <p className="mt-1 text-sm text-base-content/70">
                   Platform is fixed as Shopify.
                 </p>
@@ -742,6 +989,7 @@ const StoresPage = () => {
                 <label className="label">
                   <span className="label-text">Notes</span>
                 </label>
+
                 <textarea
                   {...createForm.register('notes')}
                   className="textarea textarea-bordered min-h-[120px] w-full"
@@ -750,15 +998,28 @@ const StoresPage = () => {
                 />
               </div>
 
-              <div className="form-control">
-                <label className="label cursor-pointer justify-start gap-3">
-                  <input
-                    {...createForm.register('isActive')}
-                    type="checkbox"
-                    className="checkbox checkbox-primary"
-                  />
-                  <span className="label-text">Active</span>
-                </label>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="form-control">
+                  <label className="label cursor-pointer justify-start gap-3">
+                    <input
+                      {...createForm.register('isActive')}
+                      type="checkbox"
+                      className="checkbox checkbox-primary"
+                    />
+                    <span className="label-text">Active</span>
+                  </label>
+                </div>
+
+                <div className="form-control">
+                  <label className="label cursor-pointer justify-start gap-3">
+                    <input
+                      {...createForm.register('isChecked')}
+                      type="checkbox"
+                      className="checkbox checkbox-info"
+                    />
+                    <span className="label-text">Checked / Reviewed</span>
+                  </label>
+                </div>
               </div>
 
               <div className="modal-action mt-6">
@@ -772,8 +1033,9 @@ const StoresPage = () => {
 
                 <button
                   type="submit"
-                  className={`btn btn-primary ${createForm.formState.isSubmitting ? 'btn-disabled' : ''
-                    }`}
+                  className={`btn btn-primary ${
+                    createForm.formState.isSubmitting ? 'btn-disabled' : ''
+                  }`}
                 >
                   {createForm.formState.isSubmitting
                     ? 'Creating...'
@@ -795,8 +1057,9 @@ const StoresPage = () => {
                 <h3 className="text-xl font-semibold text-base-content">
                   Edit Store
                 </h3>
+
                 <p className="mt-1 text-sm text-base-content/70">
-                  Update store details.
+                  Update store details and workflow status.
                 </p>
               </div>
 
@@ -878,6 +1141,7 @@ const StoresPage = () => {
                 <label className="label">
                   <span className="label-text">Notes</span>
                 </label>
+
                 <textarea
                   {...editForm.register('notes')}
                   className="textarea textarea-bordered min-h-[120px] w-full"
@@ -886,15 +1150,28 @@ const StoresPage = () => {
                 />
               </div>
 
-              <div className="form-control">
-                <label className="label cursor-pointer justify-start gap-3">
-                  <input
-                    {...editForm.register('isActive')}
-                    type="checkbox"
-                    className="checkbox checkbox-primary"
-                  />
-                  <span className="label-text">Active</span>
-                </label>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="form-control">
+                  <label className="label cursor-pointer justify-start gap-3">
+                    <input
+                      {...editForm.register('isActive')}
+                      type="checkbox"
+                      className="checkbox checkbox-primary"
+                    />
+                    <span className="label-text">Active</span>
+                  </label>
+                </div>
+
+                <div className="form-control">
+                  <label className="label cursor-pointer justify-start gap-3">
+                    <input
+                      {...editForm.register('isChecked')}
+                      type="checkbox"
+                      className="checkbox checkbox-info"
+                    />
+                    <span className="label-text">Checked / Reviewed</span>
+                  </label>
+                </div>
               </div>
 
               <div className="modal-action mt-6">
@@ -908,8 +1185,9 @@ const StoresPage = () => {
 
                 <button
                   type="submit"
-                  className={`btn btn-primary ${editForm.formState.isSubmitting ? 'btn-disabled' : ''
-                    }`}
+                  className={`btn btn-primary ${
+                    editForm.formState.isSubmitting ? 'btn-disabled' : ''
+                  }`}
                 >
                   {editForm.formState.isSubmitting
                     ? 'Saving...'
@@ -924,12 +1202,6 @@ const StoresPage = () => {
           </form>
         </dialog>
       </div>
-      <Pagination
-        pagination={pagination}
-        isLoading={isRefreshing || isListLoading}
-        onPageChange={handlePageChange}
-        onLimitChange={handleLimitChange}
-      />
     </DashboardLayout>
   );
 };
