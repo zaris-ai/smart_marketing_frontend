@@ -6,6 +6,9 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
+import Pagination, {
+  type PaginationMeta,
+} from '@/components/common/Pagination';
 
 type Store = {
   _id: string;
@@ -31,6 +34,19 @@ type StoreFormData = {
   isActive: boolean;
 };
 
+type ReplaceImportResult = {
+  totalRows: number;
+  validRows: number;
+  insertedCount: number;
+  duplicateInFileCount: number;
+  invalidCount: number;
+  invalidRows?: {
+    row: number;
+    domain?: string;
+    reason: string;
+  }[];
+};
+
 const defaultFormValues: StoreFormData = {
   name: '',
   domain: '',
@@ -44,6 +60,7 @@ const defaultFormValues: StoreFormData = {
 const StoresPage = () => {
   const createModalRef = useRef<HTMLDialogElement | null>(null);
   const editModalRef = useRef<HTMLDialogElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [stores, setStores] = useState<Store[]>([]);
   const [isListLoading, setIsListLoading] = useState(true);
@@ -53,6 +70,17 @@ const StoresPage = () => {
   const [deletingId, setDeletingId] = useState('');
   const [editingStore, setEditingStore] = useState<Store | null>(null);
 
+  const [pagination, setPagination] = useState<PaginationMeta | null>(null);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+
+  const [jsonFile, setJsonFile] = useState<File | null>(null);
+  const [isReplacing, setIsReplacing] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [replaceResult, setReplaceResult] = useState<ReplaceImportResult | null>(
+    null
+  );
+
   const createForm = useForm<StoreFormData>({
     defaultValues: defaultFormValues,
   });
@@ -61,17 +89,24 @@ const StoresPage = () => {
     defaultValues: defaultFormValues,
   });
 
-  const fetchStores = async (query?: string) => {
+  const fetchStores = async (
+    query = search,
+    nextPage = page,
+    nextLimit = limit
+  ) => {
     try {
       setListError('');
 
       const response = await api.get('/stores', {
         params: {
+          page: nextPage,
+          limit: nextLimit,
           ...(query ? { q: query } : {}),
         },
       });
 
       setStores(response?.data?.data?.stores || []);
+      setPagination(response?.data?.data?.pagination || null);
     } catch (error: any) {
       const message =
         error?.response?.data?.error ||
@@ -87,7 +122,7 @@ const StoresPage = () => {
   };
 
   useEffect(() => {
-    fetchStores();
+    fetchStores('', 1, limit);
   }, []);
 
   const openCreateModal = () => {
@@ -217,8 +252,92 @@ const StoresPage = () => {
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
+
     setIsRefreshing(true);
-    await fetchStores(search);
+    setPage(1);
+
+    await fetchStores(search, 1, limit);
+  };
+
+  const handlePageChange = async (nextPage: number) => {
+    setPage(nextPage);
+    setIsRefreshing(true);
+
+    await fetchStores(search, nextPage, limit);
+  };
+
+  const handleLimitChange = async (nextLimit: number) => {
+    setLimit(nextLimit);
+    setPage(1);
+    setIsRefreshing(true);
+
+    await fetchStores(search, 1, nextLimit);
+  };
+
+  const handleReplaceFromJson = async () => {
+    if (!jsonFile) {
+      toast.error('Please select a JSON file first.');
+      return;
+    }
+
+    if (!jsonFile.name.toLowerCase().endsWith('.json')) {
+      toast.error('Only .json files are allowed.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'This will replace all existing stores with the uploaded JSON file. Existing stores will be removed after the new file is imported successfully. Continue?'
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setIsReplacing(true);
+      setUploadProgress(null);
+      setReplaceResult(null);
+
+      const formData = new FormData();
+      formData.append('file', jsonFile);
+
+      const response = await api.post('/stores/replace-json', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        onUploadProgress: (event: any) => {
+          if (!event.total) return;
+
+          const percent = Math.round((event.loaded * 100) / event.total);
+          setUploadProgress(percent);
+        },
+      });
+
+      const result = response?.data?.data || null;
+
+      setReplaceResult(result);
+
+      toast.success(
+        response?.data?.message || 'Stores replaced successfully from JSON.'
+      );
+
+      setJsonFile(null);
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+
+      await fetchStores(search);
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.response?.data?.detail ||
+        'Failed to replace stores from JSON.';
+
+      toast.error(message);
+    } finally {
+      setIsReplacing(false);
+      setUploadProgress(null);
+    }
   };
 
   return (
@@ -246,6 +365,156 @@ const StoresPage = () => {
                 </button>
               </div>
 
+              <div className="mb-6 rounded-2xl border border-error/30 bg-error/5 p-5">
+                <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-base-content">
+                      Replace Stores from JSON
+                    </h2>
+                    <p className="mt-1 text-sm text-base-content/70">
+                      Upload a large JSON array. The server will stream the file,
+                      customize fields for your Store database, then replace the
+                      current stores collection after successful import.
+                    </p>
+                    <p className="mt-2 text-sm font-medium text-error">
+                      Warning: this action replaces all existing stores.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-3 md:flex-row md:items-end">
+                  <div className="form-control flex-1">
+                    <label className="label">
+                      <span className="label-text">JSON File</span>
+                    </label>
+
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="application/json,.json"
+                      className="file-input file-input-bordered w-full"
+                      disabled={isReplacing}
+                      onChange={(e) => {
+                        setJsonFile(e.target.files?.[0] || null);
+                        setReplaceResult(null);
+                        setUploadProgress(null);
+                      }}
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    className={`btn btn-error ${isReplacing ? 'btn-disabled' : ''
+                      }`}
+                    onClick={handleReplaceFromJson}
+                  >
+                    {isReplacing ? 'Replacing...' : 'Replace Stores'}
+                  </button>
+                </div>
+
+                {jsonFile && (
+                  <div className="mt-3 text-sm text-base-content/70">
+                    Selected file:{' '}
+                    <span className="font-medium text-base-content">
+                      {jsonFile.name}
+                    </span>
+                  </div>
+                )}
+
+                {uploadProgress !== null && (
+                  <div className="mt-4">
+                    <div className="mb-1 flex justify-between text-xs text-base-content/70">
+                      <span>Uploading</span>
+                      <span>{uploadProgress}%</span>
+                    </div>
+                    <progress
+                      className="progress progress-error w-full"
+                      value={uploadProgress}
+                      max={100}
+                    />
+                  </div>
+                )}
+
+                {isReplacing && uploadProgress === null && (
+                  <div className="mt-4 flex items-center gap-2 text-sm text-base-content/70">
+                    <span className="loading loading-spinner loading-sm" />
+                    Processing file on server...
+                  </div>
+                )}
+
+                {replaceResult && (
+                  <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-5">
+                    <div className="rounded-xl bg-base-100 p-4">
+                      <div className="text-xs text-base-content/60">
+                        Total Rows
+                      </div>
+                      <div className="mt-1 text-xl font-semibold">
+                        {replaceResult.totalRows}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl bg-base-100 p-4">
+                      <div className="text-xs text-base-content/60">
+                        Valid Rows
+                      </div>
+                      <div className="mt-1 text-xl font-semibold">
+                        {replaceResult.validRows}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl bg-base-100 p-4">
+                      <div className="text-xs text-base-content/60">
+                        Inserted
+                      </div>
+                      <div className="mt-1 text-xl font-semibold text-success">
+                        {replaceResult.insertedCount}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl bg-base-100 p-4">
+                      <div className="text-xs text-base-content/60">
+                        Duplicates
+                      </div>
+                      <div className="mt-1 text-xl font-semibold">
+                        {replaceResult.duplicateInFileCount}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl bg-base-100 p-4">
+                      <div className="text-xs text-base-content/60">
+                        Invalid Rows
+                      </div>
+                      <div className="mt-1 text-xl font-semibold text-error">
+                        {replaceResult.invalidCount}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {replaceResult?.invalidRows?.length ? (
+                  <div className="mt-5 overflow-x-auto rounded-xl border border-base-300 bg-base-100">
+                    <table className="table table-sm">
+                      <thead>
+                        <tr>
+                          <th>Row</th>
+                          <th>Domain</th>
+                          <th>Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {replaceResult.invalidRows.map((row, index) => (
+                          <tr key={`${row.row}-${index}`}>
+                            <td>{row.row}</td>
+                            <td>{row.domain || '-'}</td>
+                            <td>{row.reason}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
+
               <form
                 onSubmit={handleSearch}
                 className="mb-6 flex flex-col gap-3 md:flex-row"
@@ -266,7 +535,8 @@ const StoresPage = () => {
                 <div className="flex items-end gap-2">
                   <button
                     type="submit"
-                    className={`btn btn-outline ${isRefreshing ? 'btn-disabled' : ''}`}
+                    className={`btn btn-outline ${isRefreshing ? 'btn-disabled' : ''
+                      }`}
                   >
                     {isRefreshing ? 'Searching...' : 'Search'}
                   </button>
@@ -276,8 +546,10 @@ const StoresPage = () => {
                     className="btn btn-ghost"
                     onClick={async () => {
                       setSearch('');
+                      setPage(1);
                       setIsRefreshing(true);
-                      await fetchStores('');
+
+                      await fetchStores('', 1, limit);
                     }}
                   >
                     Reset
@@ -301,7 +573,7 @@ const StoresPage = () => {
                     No stores found
                   </h2>
                   <p className="mt-2 text-sm text-base-content/70">
-                    Create the first store to populate this list.
+                    Create the first store or replace stores from JSON.
                   </p>
                 </div>
               ) : (
@@ -318,6 +590,7 @@ const StoresPage = () => {
                         <th className="text-right">Actions</th>
                       </tr>
                     </thead>
+
                     <tbody>
                       {stores.map((store) => (
                         <tr key={store._id}>
@@ -332,7 +605,9 @@ const StoresPage = () => {
                                 Active
                               </span>
                             ) : (
-                              <span className="badge badge-ghost">Inactive</span>
+                              <span className="badge badge-ghost">
+                                Inactive
+                              </span>
                             )}
                           </td>
                           <td className="text-right">
@@ -346,6 +621,7 @@ const StoresPage = () => {
                               >
                                 Outreach
                               </Link>
+
                               <button
                                 type="button"
                                 className="btn btn-sm btn-outline"
@@ -360,7 +636,9 @@ const StoresPage = () => {
                                   }`}
                                 onClick={() => handleDeleteStore(store)}
                               >
-                                {deletingId === store._id ? 'Deleting...' : 'Delete'}
+                                {deletingId === store._id
+                                  ? 'Deleting...'
+                                  : 'Delete'}
                               </button>
                             </div>
                           </td>
@@ -497,7 +775,9 @@ const StoresPage = () => {
                   className={`btn btn-primary ${createForm.formState.isSubmitting ? 'btn-disabled' : ''
                     }`}
                 >
-                  {createForm.formState.isSubmitting ? 'Creating...' : 'Create Store'}
+                  {createForm.formState.isSubmitting
+                    ? 'Creating...'
+                    : 'Create Store'}
                 </button>
               </div>
             </form>
@@ -631,7 +911,9 @@ const StoresPage = () => {
                   className={`btn btn-primary ${editForm.formState.isSubmitting ? 'btn-disabled' : ''
                     }`}
                 >
-                  {editForm.formState.isSubmitting ? 'Saving...' : 'Save Changes'}
+                  {editForm.formState.isSubmitting
+                    ? 'Saving...'
+                    : 'Save Changes'}
                 </button>
               </div>
             </form>
@@ -642,9 +924,16 @@ const StoresPage = () => {
           </form>
         </dialog>
       </div>
+      <Pagination
+        pagination={pagination}
+        isLoading={isRefreshing || isListLoading}
+        onPageChange={handlePageChange}
+        onLimitChange={handleLimitChange}
+      />
     </DashboardLayout>
   );
 };
 
 export const getServerSideProps = withAuth();
+
 export default StoresPage;
