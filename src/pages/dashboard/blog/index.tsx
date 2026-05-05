@@ -1,11 +1,13 @@
 import dynamic from 'next/dynamic';
+import type { ChangeEvent } from 'react';
+import { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { toast } from 'sonner';
+
 import { DashboardLayout } from '@/components/layouts';
 import { Button, Input } from '@/components/ui';
 import api from '@/lib/axios';
 import { withAuth } from '@/utils';
-import { useState } from 'react';
-import { useForm } from 'react-hook-form';
-import { toast } from 'sonner';
 
 const SmartBlogEditor = dynamic(() => import('@/components/editor/SmartBlogEditor'), {
   ssr: false,
@@ -25,15 +27,15 @@ type AiBlogDoc = {
   slug: string;
   topic: string;
   audience: string;
-  sourceLinks: string[];
+  sourceLinks?: string[];
   suggestedKeywords: string[];
   metaDescription: string;
   excerpt: string;
   contentHtml: string;
   contentMarkdown: string;
   status: 'draft' | 'published';
-  createdAt: string;
-  updatedAt: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 function splitKeywords(value: string) {
@@ -47,9 +49,62 @@ function getErrorMessage(error: any, fallback: string) {
   return (
     error?.response?.data?.message ||
     error?.response?.data?.detail ||
+    error?.response?.data?.error ||
     error?.message ||
     fallback
   );
+}
+
+function extractBlogFromResponse(response: any): AiBlogDoc | null {
+  const data = response?.data;
+
+  const blog =
+    data?.data?.blog ||
+    data?.blog ||
+    data?.data?.item ||
+    data?.item ||
+    null;
+
+  if (blog) return blog;
+
+  const legacyData = data?.data;
+
+  if (!legacyData) return null;
+
+  const html =
+    legacyData?.contentHtml ||
+    legacyData?.result?.html ||
+    legacyData?.html ||
+    '';
+
+  const markdown =
+    legacyData?.contentMarkdown ||
+    legacyData?.content ||
+    legacyData?.result?.content ||
+    '';
+
+  if (!html && !markdown) return null;
+
+  return {
+    _id: legacyData?._id || legacyData?.id || '',
+    title: legacyData?.title || 'Untitled blog',
+    slug: legacyData?.slug || '',
+    topic: legacyData?.topic || '',
+    audience: legacyData?.audience || '',
+    sourceLinks: legacyData?.sourceLinks || [],
+    suggestedKeywords: legacyData?.suggestedKeywords || [],
+    metaDescription: legacyData?.metaDescription || '',
+    excerpt: legacyData?.excerpt || '',
+    contentHtml: html,
+    contentMarkdown: markdown,
+    status: legacyData?.status || 'draft',
+    createdAt: legacyData?.createdAt,
+    updatedAt: legacyData?.updatedAt,
+  };
+}
+
+function hasRealMongoId(value?: string) {
+  return Boolean(value && /^[a-f\d]{24}$/i.test(value));
 }
 
 const BlogPage = () => {
@@ -77,6 +132,15 @@ const BlogPage = () => {
     },
   });
 
+  const hydrateEditorFromBlog = (nextBlog: AiBlogDoc) => {
+    setBlog(nextBlog);
+    setEditorHtml(nextBlog.contentHtml || '');
+    setEditableTitle(nextBlog.title || '');
+    setEditableMetaDescription(nextBlog.metaDescription || '');
+    setEditableExcerpt(nextBlog.excerpt || '');
+    setEditableKeywords((nextBlog.suggestedKeywords || []).join(', '));
+  };
+
   const onSubmit = async (data: BlogCrewFormData) => {
     const toastId = toast.loading('Blog crew is running...');
 
@@ -93,14 +157,25 @@ const BlogPage = () => {
         keywords: splitKeywords(data.keywords),
       });
 
-      const createdBlog: AiBlogDoc = response.data.data.blog;
+      console.log('BLOG CREATE RESPONSE:', response.data);
 
-      setBlog(createdBlog);
-      setEditorHtml(createdBlog.contentHtml || '');
-      setEditableTitle(createdBlog.title || '');
-      setEditableMetaDescription(createdBlog.metaDescription || '');
-      setEditableExcerpt(createdBlog.excerpt || '');
-      setEditableKeywords((createdBlog.suggestedKeywords || []).join(', '));
+      const createdBlog = extractBlogFromResponse(response);
+
+      if (!createdBlog) {
+        throw new Error(
+          'API did not return a blog document or blog content.'
+        );
+      }
+
+      hydrateEditorFromBlog(createdBlog);
+
+      if (!hasRealMongoId(createdBlog._id)) {
+        toast.warning(
+          'Blog generated, but backend did not return a real MongoDB _id. Save and publish will not work until backend returns data.blog._id.',
+          { id: toastId }
+        );
+        return;
+      }
 
       toast.success('Blog generated and saved as draft.', {
         id: toastId,
@@ -119,8 +194,13 @@ const BlogPage = () => {
   };
 
   const handleSaveBlog = async () => {
-    if (!blog?._id) {
+    if (!blog) {
       toast.error('No blog selected to save.');
+      return;
+    }
+
+    if (!hasRealMongoId(blog._id)) {
+      toast.error('Cannot save. Backend did not return a valid MongoDB blog _id.');
       return;
     }
 
@@ -131,9 +211,9 @@ const BlogPage = () => {
       setServerError('');
 
       const response = await api.patch(`/blogs/${blog._id}`, {
-        title: editableTitle,
-        metaDescription: editableMetaDescription,
-        excerpt: editableExcerpt,
+        title: editableTitle.trim(),
+        metaDescription: editableMetaDescription.trim(),
+        excerpt: editableExcerpt.trim(),
         suggestedKeywords: splitKeywords(editableKeywords),
         contentHtml: editorHtml,
         editorData: {
@@ -144,14 +224,13 @@ const BlogPage = () => {
         },
       });
 
-      const updatedBlog: AiBlogDoc = response.data.data.blog;
+      const updatedBlog = extractBlogFromResponse(response);
 
-      setBlog(updatedBlog);
-      setEditorHtml(updatedBlog.contentHtml || '');
-      setEditableTitle(updatedBlog.title || '');
-      setEditableMetaDescription(updatedBlog.metaDescription || '');
-      setEditableExcerpt(updatedBlog.excerpt || '');
-      setEditableKeywords((updatedBlog.suggestedKeywords || []).join(', '));
+      if (!updatedBlog) {
+        throw new Error('API did not return updated blog document.');
+      }
+
+      hydrateEditorFromBlog(updatedBlog);
 
       toast.success('Blog saved successfully.', {
         id: toastId,
@@ -172,8 +251,13 @@ const BlogPage = () => {
   };
 
   const handlePublishBlog = async () => {
-    if (!blog?._id) {
+    if (!blog) {
       toast.error('No blog selected to publish.');
+      return;
+    }
+
+    if (!hasRealMongoId(blog._id)) {
+      toast.error('Cannot publish. Backend did not return a valid MongoDB blog _id.');
       return;
     }
 
@@ -184,9 +268,9 @@ const BlogPage = () => {
       setServerError('');
 
       const response = await api.patch(`/blogs/${blog._id}`, {
-        title: editableTitle,
-        metaDescription: editableMetaDescription,
-        excerpt: editableExcerpt,
+        title: editableTitle.trim(),
+        metaDescription: editableMetaDescription.trim(),
+        excerpt: editableExcerpt.trim(),
         suggestedKeywords: splitKeywords(editableKeywords),
         contentHtml: editorHtml,
         editorData: {
@@ -198,10 +282,13 @@ const BlogPage = () => {
         status: 'published',
       });
 
-      const updatedBlog: AiBlogDoc = response.data.data.blog;
+      const updatedBlog = extractBlogFromResponse(response);
 
-      setBlog(updatedBlog);
-      setEditorHtml(updatedBlog.contentHtml || '');
+      if (!updatedBlog) {
+        throw new Error('API did not return published blog document.');
+      }
+
+      hydrateEditorFromBlog(updatedBlog);
 
       toast.success('Blog saved and published.', {
         id: toastId,
@@ -221,23 +308,25 @@ const BlogPage = () => {
     }
   };
 
+  const canPersistBlog = hasRealMongoId(blog?._id);
+
   return (
     <DashboardLayout>
       <div className="py-8" dir="ltr">
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm p-6 md:p-8">
+        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900 md:p-8">
           <div className="mb-6">
             <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">
               Blog Crew Runner
             </h1>
 
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
               Generate a blog with title and keywords, then edit and save it.
             </p>
           </div>
 
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
             {serverError && (
-              <div className="rounded-lg bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-600 dark:text-red-400">
+              <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">
                 {serverError}
               </div>
             )}
@@ -315,23 +404,30 @@ const BlogPage = () => {
           {blog && (
             <div className="mt-10 space-y-6">
               <div className="rounded-2xl border border-gray-200 bg-gray-50 p-5 dark:border-gray-800 dark:bg-gray-950">
-                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                   <div>
                     <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
                       Saved Draft
                     </h2>
 
                     <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                      ID: {blog._id}
+                      ID: {blog._id || 'No MongoDB ID returned'}
                     </p>
 
                     <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                      Slug: {blog.slug}
+                      Slug: {blog.slug || 'No slug returned'}
                     </p>
 
                     <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
                       Status: {blog.status}
                     </p>
+
+                    {!canPersistBlog && (
+                      <p className="mt-2 rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400">
+                        Backend returned generated content but not a valid MongoDB blog ID.
+                        Save and publish are disabled until the API returns data.blog._id.
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex gap-2">
@@ -339,6 +435,7 @@ const BlogPage = () => {
                       type="button"
                       onClick={handleSaveBlog}
                       isLoading={isSaving}
+                      disabled={!canPersistBlog || isSaving}
                     >
                       Save Changes
                     </Button>
@@ -347,6 +444,7 @@ const BlogPage = () => {
                       type="button"
                       onClick={handlePublishBlog}
                       isLoading={isSaving}
+                      disabled={!canPersistBlog || isSaving}
                     >
                       Save & Publish
                     </Button>
@@ -357,7 +455,9 @@ const BlogPage = () => {
               <div className="grid gap-5 md:grid-cols-2">
                 <Input
                   value={editableTitle}
-                  onChange={(event: any) => setEditableTitle(event.target.value)}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    setEditableTitle(event.target.value)
+                  }
                   type="text"
                   label="Editable Title"
                   placeholder="Blog title"
