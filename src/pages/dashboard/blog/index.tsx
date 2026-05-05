@@ -1,19 +1,67 @@
+import dynamic from 'next/dynamic';
 import { DashboardLayout } from '@/components/layouts';
 import { Button, Input } from '@/components/ui';
 import api from '@/lib/axios';
 import { withAuth } from '@/utils';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { toast } from 'sonner';
+
+const SmartBlogEditor = dynamic(() => import('@/components/editor/SmartBlogEditor'), {
+  ssr: false,
+});
 
 type BlogCrewFormData = {
+  title: string;
   topic: string;
   audience: string;
   tone: string;
+  keywords: string;
 };
+
+type AiBlogDoc = {
+  _id: string;
+  title: string;
+  slug: string;
+  topic: string;
+  audience: string;
+  sourceLinks: string[];
+  suggestedKeywords: string[];
+  metaDescription: string;
+  excerpt: string;
+  contentHtml: string;
+  contentMarkdown: string;
+  status: 'draft' | 'published';
+  createdAt: string;
+  updatedAt: string;
+};
+
+function splitKeywords(value: string) {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function getErrorMessage(error: any, fallback: string) {
+  return (
+    error?.response?.data?.message ||
+    error?.response?.data?.detail ||
+    error?.message ||
+    fallback
+  );
+}
 
 const BlogPage = () => {
   const [serverError, setServerError] = useState('');
-  const [result, setResult] = useState<any>(null);
+  const [blog, setBlog] = useState<AiBlogDoc | null>(null);
+  const [editorHtml, setEditorHtml] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const [editableTitle, setEditableTitle] = useState('');
+  const [editableMetaDescription, setEditableMetaDescription] = useState('');
+  const [editableExcerpt, setEditableExcerpt] = useState('');
+  const [editableKeywords, setEditableKeywords] = useState('');
 
   const {
     register,
@@ -21,31 +69,155 @@ const BlogPage = () => {
     formState: { errors, isSubmitting },
   } = useForm<BlogCrewFormData>({
     defaultValues: {
+      title: '',
       topic: '',
       audience: 'founder',
       tone: 'direct and practical',
+      keywords: '',
     },
   });
 
   const onSubmit = async (data: BlogCrewFormData) => {
+    const toastId = toast.loading('Blog crew is running...');
+
     try {
       setServerError('');
-      setResult(null);
+      setBlog(null);
+      setEditorHtml('');
 
       const response = await api.post('/blogs', {
-        topic: data.topic,
-        audience: data.audience,
-        tone: data.tone,
+        title: data.title.trim(),
+        topic: data.topic.trim(),
+        audience: data.audience.trim(),
+        tone: data.tone.trim(),
+        keywords: splitKeywords(data.keywords),
       });
 
-      setResult(response.data.data.result.content);
+      const createdBlog: AiBlogDoc = response.data.data.blog;
+
+      setBlog(createdBlog);
+      setEditorHtml(createdBlog.contentHtml || '');
+      setEditableTitle(createdBlog.title || '');
+      setEditableMetaDescription(createdBlog.metaDescription || '');
+      setEditableExcerpt(createdBlog.excerpt || '');
+      setEditableKeywords((createdBlog.suggestedKeywords || []).join(', '));
+
+      toast.success('Blog generated and saved as draft.', {
+        id: toastId,
+      });
     } catch (error: any) {
-      console.log(error)
-      setServerError(
-        error?.response?.data?.message ||
-        error?.response?.data?.detail ||
-        'Failed to run blog crew.'
-      );
+      console.log(error);
+
+      const message = getErrorMessage(error, 'Failed to run blog crew.');
+
+      setServerError(message);
+
+      toast.error(message, {
+        id: toastId,
+      });
+    }
+  };
+
+  const handleSaveBlog = async () => {
+    if (!blog?._id) {
+      toast.error('No blog selected to save.');
+      return;
+    }
+
+    const toastId = toast.loading('Saving blog changes...');
+
+    try {
+      setIsSaving(true);
+      setServerError('');
+
+      const response = await api.patch(`/blogs/${blog._id}`, {
+        title: editableTitle,
+        metaDescription: editableMetaDescription,
+        excerpt: editableExcerpt,
+        suggestedKeywords: splitKeywords(editableKeywords),
+        contentHtml: editorHtml,
+        editorData: {
+          format: 'html',
+          source: 'SmartBlogEditor',
+          html: editorHtml,
+          savedAt: new Date().toISOString(),
+        },
+      });
+
+      const updatedBlog: AiBlogDoc = response.data.data.blog;
+
+      setBlog(updatedBlog);
+      setEditorHtml(updatedBlog.contentHtml || '');
+      setEditableTitle(updatedBlog.title || '');
+      setEditableMetaDescription(updatedBlog.metaDescription || '');
+      setEditableExcerpt(updatedBlog.excerpt || '');
+      setEditableKeywords((updatedBlog.suggestedKeywords || []).join(', '));
+
+      toast.success('Blog saved successfully.', {
+        id: toastId,
+      });
+    } catch (error: any) {
+      console.log(error);
+
+      const message = getErrorMessage(error, 'Failed to save blog.');
+
+      setServerError(message);
+
+      toast.error(message, {
+        id: toastId,
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handlePublishBlog = async () => {
+    if (!blog?._id) {
+      toast.error('No blog selected to publish.');
+      return;
+    }
+
+    const toastId = toast.loading('Publishing blog...');
+
+    try {
+      setIsSaving(true);
+      setServerError('');
+
+      const response = await api.patch(`/blogs/${blog._id}`, {
+        title: editableTitle,
+        metaDescription: editableMetaDescription,
+        excerpt: editableExcerpt,
+        suggestedKeywords: splitKeywords(editableKeywords),
+        contentHtml: editorHtml,
+        editorData: {
+          format: 'html',
+          source: 'SmartBlogEditor',
+          html: editorHtml,
+          savedAt: new Date().toISOString(),
+        },
+        status: 'published',
+      });
+
+      const updatedBlog: AiBlogDoc = response.data.data.blog;
+
+      setBlog(updatedBlog);
+      setEditorHtml(updatedBlog.contentHtml || '');
+
+      toast.success('Blog saved and published.', {
+        id: toastId,
+      });
+    } catch (error: any) {
+      console.log(error);
+
+      const message = getErrorMessage(error, 'Failed to publish blog.');
+
+      setServerError(message);
+
+      toast.error(message, {
+        id: toastId,
+      });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -57,8 +229,9 @@ const BlogPage = () => {
             <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">
               Blog Crew Runner
             </h1>
+
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-              Send topic, audience, and tone to generate blog output.
+              Generate a blog with title and keywords, then edit and save it.
             </p>
           </div>
 
@@ -68,6 +241,16 @@ const BlogPage = () => {
                 {serverError}
               </div>
             )}
+
+            <Input
+              {...register('title')}
+              type="text"
+              label="Title"
+              placeholder="Optional. Leave empty and the crew will generate it."
+              error={errors.title?.message}
+              dir="ltr"
+              autoFocus
+            />
 
             <Input
               {...register('topic', {
@@ -82,8 +265,25 @@ const BlogPage = () => {
               placeholder="How should a SaaS startup price an analytics product?"
               error={errors.topic?.message}
               dir="ltr"
-              autoFocus
             />
+
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">
+                Keywords
+              </label>
+
+              <textarea
+                {...register('keywords')}
+                rows={3}
+                placeholder="analytics dashboard, Shopify analytics, product performance"
+                className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-gray-400 dark:border-gray-800 dark:bg-gray-950 dark:text-white"
+                dir="ltr"
+              />
+
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Separate keywords with comma or new line.
+              </p>
+            </div>
 
             <Input
               {...register('audience', {
@@ -108,18 +308,132 @@ const BlogPage = () => {
             />
 
             <Button type="submit" isLoading={isSubmitting}>
-              Run Blog Crew
+              Generate Blog
             </Button>
           </form>
 
-          {result && (
-            <div className="mt-8">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-                Response
-              </h2>
-              <pre className="bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl p-4 text-sm overflow-x-auto whitespace-pre-wrap text-gray-800 dark:text-gray-200">
-                {JSON.stringify(result, null, 2)}
-              </pre>
+          {blog && (
+            <div className="mt-10 space-y-6">
+              <div className="rounded-2xl border border-gray-200 bg-gray-50 p-5 dark:border-gray-800 dark:bg-gray-950">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                      Saved Draft
+                    </h2>
+
+                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                      ID: {blog._id}
+                    </p>
+
+                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                      Slug: {blog.slug}
+                    </p>
+
+                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                      Status: {blog.status}
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      onClick={handleSaveBlog}
+                      isLoading={isSaving}
+                    >
+                      Save Changes
+                    </Button>
+
+                    <Button
+                      type="button"
+                      onClick={handlePublishBlog}
+                      isLoading={isSaving}
+                    >
+                      Save & Publish
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-5 md:grid-cols-2">
+                <Input
+                  value={editableTitle}
+                  onChange={(event: any) => setEditableTitle(event.target.value)}
+                  type="text"
+                  label="Editable Title"
+                  placeholder="Blog title"
+                  dir="ltr"
+                />
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">
+                    Editable Keywords
+                  </label>
+
+                  <textarea
+                    value={editableKeywords}
+                    onChange={(event) => setEditableKeywords(event.target.value)}
+                    rows={3}
+                    placeholder="keyword 1, keyword 2"
+                    className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-gray-400 dark:border-gray-800 dark:bg-gray-950 dark:text-white"
+                    dir="ltr"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">
+                  Meta Description
+                </label>
+
+                <textarea
+                  value={editableMetaDescription}
+                  onChange={(event) =>
+                    setEditableMetaDescription(event.target.value)
+                  }
+                  rows={3}
+                  maxLength={180}
+                  placeholder="SEO meta description"
+                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-gray-400 dark:border-gray-800 dark:bg-gray-950 dark:text-white"
+                  dir="ltr"
+                />
+
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  {editableMetaDescription.length}/180 characters
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">
+                  Excerpt
+                </label>
+
+                <textarea
+                  value={editableExcerpt}
+                  onChange={(event) => setEditableExcerpt(event.target.value)}
+                  rows={3}
+                  placeholder="Short blog summary"
+                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-gray-400 dark:border-gray-800 dark:bg-gray-950 dark:text-white"
+                  dir="ltr"
+                />
+              </div>
+
+              <div>
+                <div className="mb-3">
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    Blog Editor
+                  </h2>
+
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    Edit the generated content and save it back to the same AiBlog document.
+                  </p>
+                </div>
+
+                <SmartBlogEditor
+                  value={editorHtml}
+                  onChange={setEditorHtml}
+                  placeholder="Write or edit the blog content..."
+                />
+              </div>
             </div>
           )}
         </div>
@@ -129,4 +443,5 @@ const BlogPage = () => {
 };
 
 export const getServerSideProps = withAuth();
+
 export default BlogPage;

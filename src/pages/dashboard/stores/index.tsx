@@ -37,11 +37,12 @@ type StoreFormData = {
   isChecked: boolean;
 };
 
-type ReplaceImportResult = {
+type ImportResult = {
   totalRows: number;
   validRows: number;
   insertedCount: number;
-  duplicateInFileCount: number;
+  skippedExistingCount: number;
+  duplicateInBatchCount: number;
   invalidCount: number;
   invalidRows?: {
     row: number;
@@ -99,11 +100,9 @@ const StoresPage = () => {
   const [editingStore, setEditingStore] = useState<Store | null>(null);
 
   const [jsonFile, setJsonFile] = useState<File | null>(null);
-  const [isReplacing, setIsReplacing] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [replaceResult, setReplaceResult] = useState<ReplaceImportResult | null>(
-    null
-  );
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
   const createForm = useForm<StoreFormData>({
     defaultValues: defaultFormValues,
@@ -387,7 +386,7 @@ const StoresPage = () => {
     });
   };
 
-  const handleReplaceFromJson = async () => {
+  const handleImportFromJson = async () => {
     if (!jsonFile) {
       toast.error('Please select a JSON file first.');
       return;
@@ -399,20 +398,20 @@ const StoresPage = () => {
     }
 
     const confirmed = window.confirm(
-      'This will replace all existing stores with the uploaded JSON file. Existing stores will be removed only after the new file is imported successfully. Continue?'
+      'This will add new stores from the uploaded JSON file. Existing stores will not be removed. Duplicate domains will be skipped. Continue?'
     );
 
     if (!confirmed) return;
 
     try {
-      setIsReplacing(true);
+      setIsImporting(true);
       setUploadProgress(null);
-      setReplaceResult(null);
+      setImportResult(null);
 
       const formData = new FormData();
       formData.append('file', jsonFile);
 
-      const response = await api.post('/stores/replace-json', formData, {
+      const response = await api.post('/stores/import-json', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -426,11 +425,9 @@ const StoresPage = () => {
 
       const result = response?.data?.data || null;
 
-      setReplaceResult(result);
+      setImportResult(result);
 
-      toast.success(
-        response?.data?.message || 'Stores replaced successfully from JSON.'
-      );
+      toast.success(response?.data?.message || 'Stores imported successfully.');
 
       setJsonFile(null);
       setPage(1);
@@ -445,11 +442,11 @@ const StoresPage = () => {
         error?.response?.data?.error ||
         error?.response?.data?.message ||
         error?.response?.data?.detail ||
-        'Failed to replace stores from JSON.';
+        'Failed to import stores from JSON.';
 
       toast.error(message);
     } finally {
-      setIsReplacing(false);
+      setIsImporting(false);
       setUploadProgress(null);
     }
   };
@@ -481,21 +478,22 @@ const StoresPage = () => {
                 </button>
               </div>
 
-              <div className="mb-6 rounded-2xl border border-error/30 bg-error/5 p-5">
+              <div className="mb-6 rounded-2xl border border-info/30 bg-info/5 p-5">
                 <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div>
                     <h2 className="text-lg font-semibold text-base-content">
-                      Replace Stores from JSON
+                      Import Stores from JSON
                     </h2>
 
                     <p className="mt-1 text-sm text-base-content/70">
                       Upload a large JSON array. The server streams the file,
-                      customizes fields for your Store database, then replaces
-                      the current stores collection after successful import.
+                      customizes fields for your Store database, then adds only
+                      new stores.
                     </p>
 
-                    <p className="mt-2 text-sm font-medium text-error">
-                      Warning: this action replaces all existing stores.
+                    <p className="mt-2 text-sm font-medium text-info">
+                      Existing stores will not be removed. Duplicate domains
+                      will be skipped.
                     </p>
                   </div>
                 </div>
@@ -511,10 +509,10 @@ const StoresPage = () => {
                       type="file"
                       accept="application/json,.json"
                       className="file-input file-input-bordered w-full"
-                      disabled={isReplacing}
+                      disabled={isImporting}
                       onChange={(e) => {
                         setJsonFile(e.target.files?.[0] || null);
-                        setReplaceResult(null);
+                        setImportResult(null);
                         setUploadProgress(null);
                       }}
                     />
@@ -522,12 +520,12 @@ const StoresPage = () => {
 
                   <button
                     type="button"
-                    className={`btn btn-error ${
-                      isReplacing ? 'btn-disabled' : ''
+                    className={`btn btn-info ${
+                      isImporting ? 'btn-disabled' : ''
                     }`}
-                    onClick={handleReplaceFromJson}
+                    onClick={handleImportFromJson}
                   >
-                    {isReplacing ? 'Replacing...' : 'Replace Stores'}
+                    {isImporting ? 'Importing...' : 'Import Stores'}
                   </button>
                 </div>
 
@@ -548,28 +546,28 @@ const StoresPage = () => {
                     </div>
 
                     <progress
-                      className="progress progress-error w-full"
+                      className="progress progress-info w-full"
                       value={uploadProgress}
                       max={100}
                     />
                   </div>
                 )}
 
-                {isReplacing && uploadProgress === null && (
+                {isImporting && uploadProgress === null && (
                   <div className="mt-4 flex items-center gap-2 text-sm text-base-content/70">
                     <span className="loading loading-spinner loading-sm" />
                     Processing file on server...
                   </div>
                 )}
 
-                {replaceResult && (
-                  <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-5">
+                {importResult && (
+                  <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-6">
                     <div className="rounded-xl bg-base-100 p-4">
                       <div className="text-xs text-base-content/60">
                         Total Rows
                       </div>
                       <div className="mt-1 text-xl font-semibold">
-                        {replaceResult.totalRows}
+                        {importResult.totalRows}
                       </div>
                     </div>
 
@@ -578,7 +576,7 @@ const StoresPage = () => {
                         Valid Rows
                       </div>
                       <div className="mt-1 text-xl font-semibold">
-                        {replaceResult.validRows}
+                        {importResult.validRows}
                       </div>
                     </div>
 
@@ -587,16 +585,25 @@ const StoresPage = () => {
                         Inserted
                       </div>
                       <div className="mt-1 text-xl font-semibold text-success">
-                        {replaceResult.insertedCount}
+                        {importResult.insertedCount}
                       </div>
                     </div>
 
                     <div className="rounded-xl bg-base-100 p-4">
                       <div className="text-xs text-base-content/60">
-                        Duplicates
+                        Skipped Existing
                       </div>
                       <div className="mt-1 text-xl font-semibold">
-                        {replaceResult.duplicateInFileCount}
+                        {importResult.skippedExistingCount}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl bg-base-100 p-4">
+                      <div className="text-xs text-base-content/60">
+                        Duplicate In File
+                      </div>
+                      <div className="mt-1 text-xl font-semibold">
+                        {importResult.duplicateInBatchCount}
                       </div>
                     </div>
 
@@ -605,13 +612,13 @@ const StoresPage = () => {
                         Invalid Rows
                       </div>
                       <div className="mt-1 text-xl font-semibold text-error">
-                        {replaceResult.invalidCount}
+                        {importResult.invalidCount}
                       </div>
                     </div>
                   </div>
                 )}
 
-                {replaceResult?.invalidRows?.length ? (
+                {importResult?.invalidRows?.length ? (
                   <div className="mt-5 overflow-x-auto rounded-xl border border-base-300 bg-base-100">
                     <table className="table table-sm">
                       <thead>
@@ -623,7 +630,7 @@ const StoresPage = () => {
                       </thead>
 
                       <tbody>
-                        {replaceResult.invalidRows.map((row, index) => (
+                        {importResult.invalidRows.map((row, index) => (
                           <tr key={`${row.row}-${index}`}>
                             <td>{row.row}</td>
                             <td>{row.domain || '-'}</td>
@@ -817,13 +824,9 @@ const StoresPage = () => {
                             </td>
 
                             <td className="font-medium">{store.name}</td>
-
                             <td>{store.domain}</td>
-
                             <td>{store.country || '-'}</td>
-
                             <td>{store.contactName || '-'}</td>
-
                             <td>{store.contactEmail || '-'}</td>
 
                             <td>
