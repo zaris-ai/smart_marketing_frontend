@@ -12,7 +12,7 @@ import {
   UserMinusIcon,
   UsersIcon,
 } from "@heroicons/react/24/outline";
-import { IconBuildingStore, IconImageInPicture, IconMail, IconUpload, IconVideo } from "@tabler/icons-react";
+import { IconBrandSpeedtest, IconBuildingStore, IconImageInPicture, IconMail, IconUpload, IconVideo } from "@tabler/icons-react";
 
 export interface MenuItem {
   label: string;
@@ -27,6 +27,12 @@ export const menuItems: MenuItem[] = [
     label: "Users",
     href: "/dashboard/users",
     icon: UsersIcon,
+    section: "setting",
+  },
+  {
+    label: "Runs",
+    href: "/dashboard/runs",
+    icon: IconBrandSpeedtest,
     section: "setting",
   },
   {

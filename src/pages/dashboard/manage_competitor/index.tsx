@@ -6,6 +6,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useFieldArray, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
+
 type ManageCompetitorFormData = {
   name: string;
   description: string;
@@ -39,6 +41,33 @@ type ManageCompetitorAnalysisItem = {
     links: string[];
   }[];
   createdAt?: string;
+  generatedAt?: string;
+  telegram?: {
+    published?: boolean;
+    channelId?: string;
+    messageIds?: number[];
+    publishedAt?: string | null;
+    error?: string;
+  };
+};
+
+type BackgroundRun = {
+  _id: string;
+  crewName: string;
+  title?: string;
+  status: RunStatus;
+  result?: any;
+  error?: {
+    message?: string;
+    stack?: string;
+  };
+  savedRecord?: {
+    model?: string | null;
+    id?: string | null;
+  } | null;
+  createdAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 };
 
 const truncateText = (value: string, maxLength = 120) => {
@@ -46,6 +75,26 @@ const truncateText = (value: string, maxLength = 120) => {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength).trim()}...`;
 };
+
+function getErrorMessage(error: any, fallback: string) {
+  return (
+    error?.response?.data?.message ||
+    error?.response?.data?.detail ||
+    error?.response?.data?.error ||
+    error?.message ||
+    fallback
+  );
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return '-';
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return '-';
+
+  return date.toLocaleString();
+}
 
 const ManageCompetitorsPage = () => {
   const [items, setItems] = useState<ManageCompetitorItem[]>([]);
@@ -61,6 +110,9 @@ const ManageCompetitorsPage = () => {
     'Analyze selected competitors and identify strengths, weaknesses, and catch-up priorities.'
   );
   const [maxSelectedCompetitors, setMaxSelectedCompetitors] = useState<number>(0);
+
+  const [runId, setRunId] = useState('');
+  const [runStatus, setRunStatus] = useState<RunStatus | ''>('');
   const [isRunningAnalysis, setIsRunningAnalysis] = useState(false);
 
   const [analyses, setAnalyses] = useState<ManageCompetitorAnalysisItem[]>([]);
@@ -95,6 +147,18 @@ const ManageCompetitorsPage = () => {
   const linksCount = useMemo(() => fields.length, [fields.length]);
   const selectedCount = selectedCompetitorIds.length;
 
+  const runStatusLabel = useMemo(() => {
+    if (!runId) return '';
+
+    if (runStatus === 'queued') return 'Queued';
+    if (runStatus === 'running') return 'Running';
+    if (runStatus === 'success') return 'Completed';
+    if (runStatus === 'failed') return 'Failed';
+    if (runStatus === 'cancelled') return 'Cancelled';
+
+    return runStatus || 'Queued';
+  }, [runId, runStatus]);
+
   const fetchCompetitors = async (showToast = false) => {
     try {
       setLoadingList(true);
@@ -108,9 +172,7 @@ const ManageCompetitorsPage = () => {
     } catch (error: any) {
       console.log(error);
       toast.error(
-        error?.response?.data?.message ||
-          error?.response?.data?.detail ||
-          'Failed to fetch competitors.'
+        getErrorMessage(error, 'Failed to fetch competitors.')
       );
     } finally {
       setLoadingList(false);
@@ -123,6 +185,7 @@ const ManageCompetitorsPage = () => {
 
       const response = await api.get('/manage-competitor-analyses');
       const fetchedItems = response?.data?.data?.items || [];
+
       setAnalyses(fetchedItems);
 
       if (preferredId) {
@@ -130,20 +193,25 @@ const ManageCompetitorsPage = () => {
           fetchedItems.find(
             (item: ManageCompetitorAnalysisItem) => item._id === preferredId
           ) || null;
+
         setActiveAnalysis(matched || fetchedItems[0] || null);
       } else {
-        if (!activeAnalysis && fetchedItems.length > 0) {
-          setActiveAnalysis(fetchedItems[0]);
-        }
+        setActiveAnalysis((current) => {
+          if (!current && fetchedItems.length > 0) {
+            return fetchedItems[0];
+          }
 
-        if (
-          activeAnalysis &&
-          !fetchedItems.some(
-            (item: ManageCompetitorAnalysisItem) => item._id === activeAnalysis._id
-          )
-        ) {
-          setActiveAnalysis(fetchedItems[0] || null);
-        }
+          if (
+            current &&
+            !fetchedItems.some(
+              (item: ManageCompetitorAnalysisItem) => item._id === current._id
+            )
+          ) {
+            return fetchedItems[0] || null;
+          }
+
+          return current;
+        });
       }
 
       if (showToast) {
@@ -152,9 +220,7 @@ const ManageCompetitorsPage = () => {
     } catch (error: any) {
       console.log(error);
       toast.error(
-        error?.response?.data?.message ||
-          error?.response?.data?.detail ||
-          'Failed to fetch analyses.'
+        getErrorMessage(error, 'Failed to fetch analyses.')
       );
     } finally {
       setLoadingAnalyses(false);
@@ -165,6 +231,80 @@ const ManageCompetitorsPage = () => {
     fetchCompetitors();
     fetchAnalyses();
   }, []);
+
+  useEffect(() => {
+    if (!runId) return;
+
+    const timer = setInterval(async () => {
+      try {
+        const response = await api.get(`/background-runs/${runId}`);
+        const run: BackgroundRun | undefined = response?.data?.data;
+
+        if (!run) return;
+
+        setRunStatus(run.status);
+
+        if (run.status === 'success') {
+          clearInterval(timer);
+          setIsRunningAnalysis(false);
+
+          const savedId = run.savedRecord?.id || undefined;
+
+          await fetchAnalyses(savedId);
+
+          toast.success('Competitor analysis generated and saved successfully.');
+
+          setRunId('');
+          setRunStatus('');
+
+          return;
+        }
+
+        if (run.status === 'failed') {
+          clearInterval(timer);
+          setIsRunningAnalysis(false);
+
+          toast.error(
+            run?.error?.message || 'Competitor analysis background task failed.'
+          );
+
+          setRunId('');
+          setRunStatus('');
+
+          return;
+        }
+
+        if (run.status === 'cancelled') {
+          clearInterval(timer);
+          setIsRunningAnalysis(false);
+
+          toast.error(
+            run?.error?.message || 'Competitor analysis task was cancelled.'
+          );
+
+          setRunId('');
+          setRunStatus('');
+
+          return;
+        }
+      } catch (error: any) {
+        clearInterval(timer);
+        setIsRunningAnalysis(false);
+
+        toast.error(
+          getErrorMessage(
+            error,
+            'Competitor analysis completed, but the result could not be loaded.'
+          )
+        );
+
+        setRunId('');
+        setRunStatus('');
+      }
+    }, 4000);
+
+    return () => clearInterval(timer);
+  }, [runId]);
 
   const onSubmit = async (data: ManageCompetitorFormData) => {
     const toastId = toast.loading('Saving competitor...');
@@ -195,12 +335,9 @@ const ManageCompetitorsPage = () => {
       );
     } catch (error: any) {
       console.log(error);
-      toast.error(
-        error?.response?.data?.message ||
-          error?.response?.data?.detail ||
-          'Failed to create competitor.',
-        { id: toastId }
-      );
+      toast.error(getErrorMessage(error, 'Failed to create competitor.'), {
+        id: toastId,
+      });
     }
   };
 
@@ -235,12 +372,9 @@ const ManageCompetitorsPage = () => {
       );
     } catch (error: any) {
       console.log(error);
-      toast.error(
-        error?.response?.data?.message ||
-          error?.response?.data?.detail ||
-          'Failed to delete competitor.',
-        { id: toastId }
-      );
+      toast.error(getErrorMessage(error, 'Failed to delete competitor.'), {
+        id: toastId,
+      });
     } finally {
       setDeletingCompetitorId(null);
     }
@@ -252,10 +386,10 @@ const ManageCompetitorsPage = () => {
       return;
     }
 
-    const toastId = toast.loading('Running competitor analysis...');
-
     try {
       setIsRunningAnalysis(true);
+      setRunId('');
+      setRunStatus('');
 
       const response = await api.post('/manage-competitor-analyses', {
         appName: 'Arka: Smart Analyzer',
@@ -265,25 +399,46 @@ const ManageCompetitorsPage = () => {
         maxSelectedCompetitors: Number(maxSelectedCompetitors) || 0,
       });
 
-      const createdAnalysis = response?.data?.data || null;
+      const responseData = response?.data?.data;
+      const nextRunId = responseData?.runId;
+      const nextStatus = responseData?.status || 'queued';
+
+      if (nextRunId) {
+        setRunId(nextRunId);
+        setRunStatus(nextStatus);
+        toast.success(
+          response?.data?.message || 'Competitor analysis started in background.'
+        );
+        return;
+      }
+
+      const createdAnalysis = responseData || null;
 
       await fetchAnalyses(createdAnalysis?._id);
 
       toast.success(
         response?.data?.message ||
-          'Competitor analysis generated and saved successfully.',
-        { id: toastId }
+          'Competitor analysis generated and saved successfully.'
       );
     } catch (error: any) {
       console.log(error);
-      toast.error(
-        error?.response?.data?.message ||
-          error?.response?.data?.detail ||
-          'Failed to run competitor analysis.',
-        { id: toastId }
-      );
-    } finally {
+      toast.error(getErrorMessage(error, 'Failed to run competitor analysis.'));
       setIsRunningAnalysis(false);
+    }
+  };
+
+  const stopAnalysis = async () => {
+    if (!runId) return;
+
+    try {
+      await api.patch(`/background-runs/${runId}/cancel`);
+
+      setIsRunningAnalysis(false);
+      setRunStatus('cancelled');
+      toast.error('Competitor analysis task was cancelled.');
+      setRunId('');
+    } catch (error: any) {
+      toast.error(getErrorMessage(error, 'Failed to stop background task.'));
     }
   };
 
@@ -314,9 +469,7 @@ const ManageCompetitorsPage = () => {
     } catch (error: any) {
       console.log(error);
       toast.error(
-        error?.response?.data?.message ||
-          error?.response?.data?.detail ||
-          'Failed to delete competitor analysis.',
+        getErrorMessage(error, 'Failed to delete competitor analysis.'),
         { id: toastId }
       );
     } finally {
@@ -328,16 +481,34 @@ const ManageCompetitorsPage = () => {
     <DashboardLayout>
       <div className="py-8" dir="ltr">
         <div className="space-y-6">
-          <div className="card bg-base-100 border border-base-300 shadow-sm">
+          <div className="card border border-base-300 bg-base-100 shadow-sm">
             <div className="card-body">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <h1 className="text-2xl font-semibold">
                     Competitor Analysis Workspace
                   </h1>
-                  <p className="text-sm opacity-70 mt-2">
-                    Select competitors, run analysis, and open saved reports.
+                  <p className="mt-2 text-sm opacity-70">
+                    Select competitors, run analysis in the background, and open saved reports.
                   </p>
+
+                  {isRunningAnalysis && (
+                    <div className="mt-4 rounded-xl border border-info/30 bg-info/10 p-3 text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="loading loading-spinner loading-sm" />
+                        <span>
+                          Background analysis is running. Status:{' '}
+                          <strong>{runStatusLabel}</strong>
+                        </span>
+                      </div>
+
+                      {runId && (
+                        <div className="mt-2 break-all font-mono text-xs opacity-70">
+                          Run ID: {runId}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
@@ -371,12 +542,12 @@ const ManageCompetitorsPage = () => {
           </div>
 
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-            <div className="card bg-base-100 border border-base-300 shadow-sm">
+            <div className="card border border-base-300 bg-base-100 shadow-sm">
               <div className="card-body">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h2 className="text-xl font-semibold">All Competitors</h2>
-                    <p className="text-sm opacity-70 mt-2">
+                    <p className="mt-2 text-sm opacity-70">
                       Choose the competitors to include in the analysis.
                     </p>
                   </div>
@@ -399,16 +570,17 @@ const ManageCompetitorsPage = () => {
                         <th className="w-28">Actions</th>
                       </tr>
                     </thead>
+
                     <tbody>
                       {loadingList ? (
                         <tr>
-                          <td colSpan={7} className="text-center py-8">
+                          <td colSpan={7} className="py-8 text-center">
                             Loading competitors...
                           </td>
                         </tr>
                       ) : items.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="text-center py-8">
+                          <td colSpan={7} className="py-8 text-center">
                             No competitors found.
                           </td>
                         </tr>
@@ -421,12 +593,16 @@ const ManageCompetitorsPage = () => {
                                 className="checkbox checkbox-sm"
                                 checked={selectedCompetitorIds.includes(item._id)}
                                 onChange={() => toggleCompetitorSelection(item._id)}
+                                disabled={isRunningAnalysis}
                               />
                             </td>
+
                             <td>{index + 1}</td>
+
                             <td className="align-top">
                               <div className="font-semibold">{item.name}</div>
                             </td>
+
                             <td className="align-top">
                               <div
                                 className="max-w-xs text-sm leading-6"
@@ -435,6 +611,7 @@ const ManageCompetitorsPage = () => {
                                 {truncateText(item.description, 110)}
                               </div>
                             </td>
+
                             <td className="align-top">
                               <div
                                 className={`badge ${
@@ -446,6 +623,7 @@ const ManageCompetitorsPage = () => {
                                 {item.status}
                               </div>
                             </td>
+
                             <td className="align-top">
                               <div className="space-y-2">
                                 {Array.isArray(item.links) && item.links.length > 0 ? (
@@ -466,11 +644,15 @@ const ManageCompetitorsPage = () => {
                                 )}
                               </div>
                             </td>
+
                             <td className="align-top">
                               <button
                                 type="button"
                                 className="btn btn-sm btn-error btn-outline"
-                                disabled={deletingCompetitorId === item._id}
+                                disabled={
+                                  deletingCompetitorId === item._id ||
+                                  isRunningAnalysis
+                                }
                                 onClick={() =>
                                   deleteCompetitor(item._id, item.name)
                                 }
@@ -493,16 +675,16 @@ const ManageCompetitorsPage = () => {
               </div>
             </div>
 
-            <div className="card bg-base-100 border border-base-300 shadow-sm h-fit">
+            <div className="card h-fit border border-base-300 bg-base-100 shadow-sm">
               <div className="card-body space-y-5">
                 <div>
                   <h2 className="text-xl font-semibold">Run Analysis</h2>
-                  <p className="text-sm opacity-70 mt-2">
+                  <p className="mt-2 text-sm opacity-70">
                     Run the crew only on the selected competitors.
                   </p>
                 </div>
 
-                <div className="stats stats-vertical shadow border border-base-300">
+                <div className="stats stats-vertical border border-base-300 shadow">
                   <div className="stat">
                     <div className="stat-title">Selected Competitors</div>
                     <div className="stat-value text-primary">{selectedCount}</div>
@@ -524,6 +706,7 @@ const ManageCompetitorsPage = () => {
                       setMaxSelectedCompetitors(Number(e.target.value) || 0)
                     }
                     className="input input-bordered w-full"
+                    disabled={isRunningAnalysis}
                   />
                   <p className="mt-2 text-sm opacity-70">
                     Use 0 to keep all selected competitors.
@@ -540,27 +723,37 @@ const ManageCompetitorsPage = () => {
                     rows={5}
                     className="textarea textarea-bordered w-full"
                     placeholder="Analyze selected competitors and identify strengths, weaknesses, and catch-up priorities."
+                    disabled={isRunningAnalysis}
                   />
                 </div>
 
-                <button
-                  type="button"
-                  className="btn btn-primary w-full"
-                  onClick={runAnalysis}
-                  disabled={isRunningAnalysis}
-                >
-                  {isRunningAnalysis ? 'Running Analysis...' : 'Run Analysis'}
-                </button>
+                {isRunningAnalysis ? (
+                  <button
+                    type="button"
+                    className="btn btn-warning w-full"
+                    onClick={stopAnalysis}
+                  >
+                    Stop Background Task
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary w-full"
+                    onClick={runAnalysis}
+                  >
+                    Run Analysis
+                  </button>
+                )}
               </div>
             </div>
           </div>
 
-          <div className="card bg-base-100 border border-base-300 shadow-sm">
+          <div className="card border border-base-300 bg-base-100 shadow-sm">
             <div className="card-body">
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-xl font-semibold">Analysis Result</h2>
-                  <p className="text-sm opacity-70 mt-2">
+                  <p className="mt-2 text-sm opacity-70">
                     Current saved HTML result rendered directly from the database.
                   </p>
                 </div>
@@ -587,6 +780,9 @@ const ManageCompetitorsPage = () => {
                         <div className="font-semibold">{activeAnalysis.title}</div>
                         <div className="mt-2 text-sm opacity-70">
                           {activeAnalysis.analysisGoal || '-'}
+                        </div>
+                        <div className="mt-2 text-xs opacity-60">
+                          Created: {formatDate(activeAnalysis.createdAt)}
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                           {activeAnalysis.selectedCompetitors?.map((item) => (
@@ -628,10 +824,10 @@ const ManageCompetitorsPage = () => {
         {isCreateModalOpen ? (
           <dialog className="modal modal-open">
             <div className="modal-box max-w-2xl">
-              <div className="flex items-center justify-between gap-3 mb-4">
+              <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-xl font-semibold">Create Competitor</h3>
-                  <p className="text-sm opacity-70 mt-1">
+                  <p className="mt-1 text-sm opacity-70">
                     Add a new competitor to your saved list.
                   </p>
                 </div>
@@ -774,10 +970,10 @@ const ManageCompetitorsPage = () => {
         {isAnalysesModalOpen ? (
           <dialog className="modal modal-open">
             <div className="modal-box max-w-3xl">
-              <div className="flex items-center justify-between gap-3 mb-4">
+              <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-xl font-semibold">Saved Analyses</h3>
-                  <p className="text-sm opacity-70 mt-1">
+                  <p className="mt-1 text-sm opacity-70">
                     Select one analysis to load it into the main viewer.
                   </p>
                 </div>
@@ -802,7 +998,7 @@ const ManageCompetitorsPage = () => {
                 </div>
               </div>
 
-              <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+              <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
                 {loadingAnalyses ? (
                   <div className="text-sm opacity-70">Loading analyses...</div>
                 ) : analyses.length === 0 ? (

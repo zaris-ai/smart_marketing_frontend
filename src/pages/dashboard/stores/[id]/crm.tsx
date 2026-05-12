@@ -61,54 +61,57 @@ type CrmSummary = {
   nextFollowUpAt: string | null;
 };
 
+type StoreCrmAnalysisShape = {
+  crmStatus?: {
+    stage?: string;
+    hasEmailed?: boolean;
+    lastActivityAt?: string | null;
+    lastEmailAt?: string | null;
+    nextFollowUpAt?: string | null;
+    dataQuality?: string;
+  };
+  score?: {
+    priority?: number;
+    confidence?: number;
+    reason?: string;
+  };
+  summary?: {
+    executiveSummary?: string;
+    whatHappened?: string[];
+    importantSignals?: string[];
+    missingInformation?: string[];
+    risks?: string[];
+  };
+  recommendation?: {
+    nextAction?: string;
+    recommendedChannel?: string;
+    recommendedTiming?: string;
+    reason?: string;
+  };
+  outreach?: {
+    subject?: string;
+    body?: string;
+    angle?: string;
+  };
+  crmUpdates?: {
+    suggestedTags?: string[];
+    suggestedOutcome?: string;
+    suggestedNote?: string;
+  };
+};
+
 type StoreCrmAnalysisDoc = {
   _id: string;
   store: string;
-  storeName: string;
-  storeDomain: string;
-  title: string;
-  crewName: string;
-  analysis: {
-    crmStatus?: {
-      stage?: string;
-      hasEmailed?: boolean;
-      lastActivityAt?: string | null;
-      lastEmailAt?: string | null;
-      nextFollowUpAt?: string | null;
-      dataQuality?: string;
-    };
-    score?: {
-      priority?: number;
-      confidence?: number;
-      reason?: string;
-    };
-    summary?: {
-      executiveSummary?: string;
-      whatHappened?: string[];
-      importantSignals?: string[];
-      missingInformation?: string[];
-      risks?: string[];
-    };
-    recommendation?: {
-      nextAction?: string;
-      recommendedChannel?: string;
-      recommendedTiming?: string;
-      reason?: string;
-    };
-    outreach?: {
-      subject?: string;
-      body?: string;
-      angle?: string;
-    };
-    crmUpdates?: {
-      suggestedTags?: string[];
-      suggestedOutcome?: string;
-      suggestedNote?: string;
-    };
-  };
+  storeName?: string;
+  storeDomain?: string;
+  title?: string;
+  crewName?: string;
+  analysis?: StoreCrmAnalysisShape;
+  result?: StoreCrmAnalysisShape;
   status: 'success' | 'failed';
   error?: string;
-  generatedAt: string;
+  generatedAt?: string;
   createdAt: string;
   telegram?: {
     published: boolean;
@@ -146,13 +149,17 @@ const defaultFormState: FormState = {
 function formatDate(value?: string | null) {
   if (!value) return '-';
 
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return '-';
+
   return new Intl.DateTimeFormat('en', {
     year: 'numeric',
     month: 'short',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function typeLabel(type: CrmActivityType | string) {
@@ -191,6 +198,10 @@ function renderStringList(items?: string[]) {
   return items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>);
 }
 
+function getAnalysisData(doc: StoreCrmAnalysisDoc | null) {
+  return doc?.analysis || doc?.result || null;
+}
+
 export default function StoreCrmPage() {
   const router = useRouter();
 
@@ -206,6 +217,10 @@ export default function StoreCrmPage() {
   const [latestAnalysis, setLatestAnalysis] =
     useState<StoreCrmAnalysisDoc | null>(null);
 
+  const analysisData = useMemo(() => {
+    return getAnalysisData(latestAnalysis);
+  }, [latestAnalysis]);
+
   const [form, setForm] = useState<FormState>(defaultFormState);
 
   const [search, setSearch] = useState('');
@@ -220,6 +235,9 @@ export default function StoreCrmPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [deletingId, setDeletingId] = useState('');
+
+  const [analysisRunId, setAnalysisRunId] = useState('');
+  const [analysisRunStatus, setAnalysisRunStatus] = useState('');
 
   const fetchCrmActivities = async (
     nextPage = page,
@@ -269,6 +287,46 @@ export default function StoreCrmPage() {
     fetchCrmActivities(1, limit);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
+
+  useEffect(() => {
+    if (!analysisRunId) return;
+
+    const timer = setInterval(async () => {
+      try {
+        const response = await api.get(`/background-runs/${analysisRunId}`);
+        const run = response?.data?.data;
+
+        if (!run) return;
+
+        setAnalysisRunStatus(run.status || '');
+
+        if (run.status === 'success') {
+          clearInterval(timer);
+
+          toast.success('CRM analysis completed.');
+
+          await fetchCrmActivities(page, limit);
+
+          setAnalysisRunId('');
+          setAnalysisRunStatus('');
+        }
+
+        if (run.status === 'failed') {
+          clearInterval(timer);
+
+          toast.error(run?.error?.message || 'CRM analysis failed.');
+
+          setAnalysisRunId('');
+          setAnalysisRunStatus('');
+        }
+      } catch {
+        // Keep polling silently.
+      }
+    }, 4000);
+
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisRunId]);
 
   const updateForm = <K extends keyof FormState>(
     key: K,
@@ -370,22 +428,28 @@ export default function StoreCrmPage() {
     if (!storeId) return;
 
     const confirmed = window.confirm(
-      'Run AI CRM analysis for this store? The result will be saved and published to Telegram if Telegram is configured.'
+      'Run AI CRM analysis for this store? The task will run in the background. You can stay on this page.'
     );
 
     if (!confirmed) return;
 
     try {
       setIsAnalyzing(true);
+      setAnalysisRunId('');
+      setAnalysisRunStatus('');
 
-      const response = await api.post(`/stores/${storeId}/crm-analysis/run`);
+      const response = await api.post(
+        `/stores/${storeId}/crm-activities/analyze`
+      );
 
-      const doc = response?.data?.data || null;
+      const runId = response?.data?.data?.runId || '';
+      const status = response?.data?.data?.status || 'queued';
 
-      setLatestAnalysis(doc);
+      setAnalysisRunId(runId);
+      setAnalysisRunStatus(status);
 
       toast.success(
-        response?.data?.message || 'CRM analysis generated successfully.'
+        response?.data?.message || 'CRM analysis started in background.'
       );
 
       await fetchCrmActivities(page, limit);
@@ -393,7 +457,7 @@ export default function StoreCrmPage() {
       const message =
         error?.response?.data?.error ||
         error?.response?.data?.message ||
-        'Failed to analyze CRM.';
+        'Failed to start CRM analysis.';
 
       toast.error(message);
     } finally {
@@ -525,33 +589,53 @@ export default function StoreCrmPage() {
 
                     <p className="mt-1 text-sm text-base-content/70">
                       Analyze this store’s CRM notes, email history, follow-ups
-                      and sales state. The result is saved in MongoDB and sent to
-                      Telegram if configured.
+                      and sales state. The task runs in the background while you
+                      stay on this page.
                     </p>
                   </div>
 
                   <button
                     type="button"
                     className={`btn btn-primary ${
-                      isAnalyzing ? 'btn-disabled' : ''
+                      isAnalyzing || analysisRunId ? 'btn-disabled' : ''
                     }`}
                     onClick={handleAnalyzeCrm}
                   >
-                    {isAnalyzing ? 'Analyzing...' : 'Analyze CRM'}
+                    {isAnalyzing || analysisRunId ? 'Running...' : 'Analyze CRM'}
                   </button>
                 </div>
 
-                {isAnalyzing && (
-                  <div className="mt-5 flex items-center gap-2 text-sm text-base-content/70">
-                    <span className="loading loading-spinner loading-sm" />
-                    Running CRM crew, saving result, and publishing to
-                    Telegram...
+                {(isAnalyzing || analysisRunId) && (
+                  <div className="mt-5 rounded-xl border border-info/30 bg-info/5 p-4 text-sm text-base-content/70">
+                    <div className="flex items-center gap-2">
+                      <span className="loading loading-spinner loading-sm" />
+                      <span>
+                        {analysisRunId
+                          ? `CRM analysis is running in background. Status: ${
+                              analysisRunStatus || 'queued'
+                            }`
+                          : 'Starting background CRM analysis...'}
+                      </span>
+                    </div>
+
+                    {analysisRunId ? (
+                      <div className="mt-2 break-all font-mono text-xs text-base-content/50">
+                        Run ID: {analysisRunId}
+                      </div>
+                    ) : null}
                   </div>
                 )}
 
                 {!latestAnalysis ? (
                   <div className="mt-5 rounded-xl border border-dashed border-base-300 bg-base-200/40 p-5 text-sm text-base-content/70">
                     No CRM analysis saved yet.
+                  </div>
+                ) : !analysisData ? (
+                  <div className="mt-5 rounded-xl border border-warning/30 bg-warning/5 p-5 text-sm text-base-content/80">
+                    <div className="font-semibold">Analysis saved, but its structure is not readable by this page.</div>
+                    <pre className="mt-3 max-h-[320px] overflow-auto rounded-lg bg-base-200 p-4 text-xs">
+                      {JSON.stringify(latestAnalysis, null, 2)}
+                    </pre>
                   </div>
                 ) : (
                   <div className="mt-5 space-y-5">
@@ -561,8 +645,7 @@ export default function StoreCrmPage() {
                           Stage
                         </div>
                         <div className="mt-1 font-semibold">
-                          {latestAnalysis.analysis?.crmStatus?.stage ||
-                            'unknown'}
+                          {analysisData.crmStatus?.stage || 'unknown'}
                         </div>
                       </div>
 
@@ -571,8 +654,7 @@ export default function StoreCrmPage() {
                           Priority
                         </div>
                         <div className="mt-1 font-semibold">
-                          {latestAnalysis.analysis?.score?.priority ?? '-'} /
-                          100
+                          {analysisData.score?.priority ?? '-'} / 100
                         </div>
                       </div>
 
@@ -581,8 +663,7 @@ export default function StoreCrmPage() {
                           Confidence
                         </div>
                         <div className="mt-1 font-semibold">
-                          {latestAnalysis.analysis?.score?.confidence ?? '-'} /
-                          100
+                          {analysisData.score?.confidence ?? '-'} / 100
                         </div>
                       </div>
 
@@ -607,8 +688,7 @@ export default function StoreCrmPage() {
                     <div>
                       <h3 className="font-semibold">Executive Summary</h3>
                       <p className="mt-2 text-sm leading-6 text-base-content/80">
-                        {latestAnalysis.analysis?.summary?.executiveSummary ||
-                          '-'}
+                        {analysisData.summary?.executiveSummary || '-'}
                       </p>
                     </div>
 
@@ -621,15 +701,14 @@ export default function StoreCrmPage() {
                             <span className="text-base-content/60">
                               Next action:
                             </span>{' '}
-                            {latestAnalysis.analysis?.recommendation
-                              ?.nextAction || '-'}
+                            {analysisData.recommendation?.nextAction || '-'}
                           </div>
 
                           <div className="mt-1">
                             <span className="text-base-content/60">
                               Channel:
                             </span>{' '}
-                            {latestAnalysis.analysis?.recommendation
+                            {analysisData.recommendation
                               ?.recommendedChannel || '-'}
                           </div>
 
@@ -637,13 +716,12 @@ export default function StoreCrmPage() {
                             <span className="text-base-content/60">
                               Timing:
                             </span>{' '}
-                            {latestAnalysis.analysis?.recommendation
+                            {analysisData.recommendation
                               ?.recommendedTiming || '-'}
                           </div>
 
                           <p className="mt-3 text-base-content/80">
-                            {latestAnalysis.analysis?.recommendation?.reason ||
-                              ''}
+                            {analysisData.recommendation?.reason || ''}
                           </p>
                         </div>
                       </div>
@@ -656,18 +734,18 @@ export default function StoreCrmPage() {
                             <span className="text-base-content/60">
                               Subject:
                             </span>{' '}
-                            {latestAnalysis.analysis?.outreach?.subject || '-'}
+                            {analysisData.outreach?.subject || '-'}
                           </div>
 
                           <div className="mt-1">
                             <span className="text-base-content/60">
                               Angle:
                             </span>{' '}
-                            {latestAnalysis.analysis?.outreach?.angle || '-'}
+                            {analysisData.outreach?.angle || '-'}
                           </div>
 
                           <p className="mt-3 whitespace-pre-wrap text-base-content/80">
-                            {latestAnalysis.analysis?.outreach?.body || ''}
+                            {analysisData.outreach?.body || ''}
                           </p>
                         </div>
                       </div>
@@ -678,7 +756,7 @@ export default function StoreCrmPage() {
                         <h3 className="font-semibold">Important Signals</h3>
                         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-base-content/80">
                           {renderStringList(
-                            latestAnalysis.analysis?.summary?.importantSignals
+                            analysisData.summary?.importantSignals
                           )}
                         </ul>
                       </div>
@@ -687,7 +765,7 @@ export default function StoreCrmPage() {
                         <h3 className="font-semibold">Missing Information</h3>
                         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-base-content/80">
                           {renderStringList(
-                            latestAnalysis.analysis?.summary?.missingInformation
+                            analysisData.summary?.missingInformation
                           )}
                         </ul>
                       </div>
@@ -695,9 +773,7 @@ export default function StoreCrmPage() {
                       <div>
                         <h3 className="font-semibold">Risks</h3>
                         <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-base-content/80">
-                          {renderStringList(
-                            latestAnalysis.analysis?.summary?.risks
-                          )}
+                          {renderStringList(analysisData.summary?.risks)}
                         </ul>
                       </div>
                     </div>
@@ -725,6 +801,24 @@ export default function StoreCrmPage() {
                       {latestAnalysis.telegram?.error && (
                         <div className="mt-1 text-error">
                           Telegram error: {latestAnalysis.telegram.error}
+                        </div>
+                      )}
+
+                      {analysisData.score?.reason && (
+                        <div className="mt-3">
+                          <span className="text-base-content/60">
+                            Score reason:
+                          </span>{' '}
+                          {analysisData.score.reason}
+                        </div>
+                      )}
+
+                      {analysisData.crmUpdates?.suggestedNote && (
+                        <div className="mt-3">
+                          <span className="text-base-content/60">
+                            Suggested CRM note:
+                          </span>{' '}
+                          {analysisData.crmUpdates.suggestedNote}
                         </div>
                       )}
                     </div>

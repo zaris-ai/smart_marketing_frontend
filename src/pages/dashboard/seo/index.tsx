@@ -3,6 +3,9 @@ import { Button } from '@/components/ui';
 import api from '@/lib/axios';
 import { withAuth } from '@/utils';
 import { useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
+
+type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
 
 type SeoAuditDoc = {
   _id: string;
@@ -14,18 +17,81 @@ type SeoAuditDoc = {
   generatedAt: string;
   createdAt: string;
   updatedAt: string;
+  telegram?: {
+    published?: boolean;
+    channelId?: string;
+    messageIds?: number[];
+    publishedAt?: string | null;
+    error?: string;
+  };
+};
+
+type BackgroundRun = {
+  _id: string;
+  crewName: string;
+  title?: string;
+  status: RunStatus;
+  result?: any;
+  error?: {
+    message?: string;
+    stack?: string;
+  };
+  savedRecord?: {
+    model?: string | null;
+    id?: string | null;
+  } | null;
+  createdAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 };
 
 const WEBSITE_URL = 'https://web.arkaanalyzer.com/';
+
+function getErrorMessage(error: any, fallback: string) {
+  return (
+    error?.response?.data?.message ||
+    error?.response?.data?.detail ||
+    error?.response?.data?.error ||
+    error?.message ||
+    fallback
+  );
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return '-';
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return '-';
+
+  return date.toLocaleString();
+}
 
 const SeoAuditPage = () => {
   const [serverError, setServerError] = useState('');
   const [html, setHtml] = useState('');
   const [latestDoc, setLatestDoc] = useState<SeoAuditDoc | null>(null);
+
   const [isLoadingLatest, setIsLoadingLatest] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isBackgroundRunning, setIsBackgroundRunning] = useState(false);
+
+  const [runId, setRunId] = useState('');
+  const [runStatus, setRunStatus] = useState<RunStatus | ''>('');
 
   const hasResult = useMemo(() => html.trim().length > 0, [html]);
+
+  const runStatusLabel = useMemo(() => {
+    if (!runId) return '';
+
+    if (runStatus === 'queued') return 'Queued';
+    if (runStatus === 'running') return 'Running';
+    if (runStatus === 'success') return 'Completed';
+    if (runStatus === 'failed') return 'Failed';
+    if (runStatus === 'cancelled') return 'Cancelled';
+
+    return runStatus || 'Queued';
+  }, [runId, runStatus]);
 
   const fetchLatest = async () => {
     try {
@@ -44,12 +110,7 @@ const SeoAuditPage = () => {
       }
     } catch (error: any) {
       console.log(error);
-      setServerError(
-        error?.response?.data?.message ||
-          error?.response?.data?.detail ||
-          error?.response?.data?.error ||
-          'Failed to fetch latest SEO audit.'
-      );
+      setServerError(getErrorMessage(error, 'Failed to fetch latest SEO audit.'));
     } finally {
       setIsLoadingLatest(false);
     }
@@ -59,13 +120,110 @@ const SeoAuditPage = () => {
     fetchLatest();
   }, []);
 
+  useEffect(() => {
+    if (!runId) return;
+
+    const timer = setInterval(async () => {
+      try {
+        const response = await api.get(`/background-runs/${runId}`);
+        const run: BackgroundRun | undefined = response?.data?.data;
+
+        if (!run) return;
+
+        setRunStatus(run.status);
+
+        if (run.status === 'success') {
+          clearInterval(timer);
+          setIsBackgroundRunning(false);
+          setIsSubmitting(false);
+
+          await fetchLatest();
+
+          toast.success('SEO audit completed and saved.');
+
+          setRunId('');
+          setRunStatus('');
+
+          return;
+        }
+
+        if (run.status === 'failed') {
+          clearInterval(timer);
+          setIsBackgroundRunning(false);
+          setIsSubmitting(false);
+
+          const message = run?.error?.message || 'SEO audit background task failed.';
+
+          setServerError(message);
+          toast.error(message);
+
+          setRunId('');
+          setRunStatus('');
+
+          return;
+        }
+
+        if (run.status === 'cancelled') {
+          clearInterval(timer);
+          setIsBackgroundRunning(false);
+          setIsSubmitting(false);
+
+          const message = run?.error?.message || 'SEO audit task was cancelled.';
+
+          setServerError(message);
+          toast.error('SEO audit task was cancelled.');
+
+          setRunId('');
+          setRunStatus('');
+
+          return;
+        }
+      } catch (error: any) {
+        clearInterval(timer);
+        setIsBackgroundRunning(false);
+        setIsSubmitting(false);
+
+        const message = getErrorMessage(
+          error,
+          'SEO audit completed, but the result could not be loaded.'
+        );
+
+        setServerError(message);
+        toast.error(message);
+
+        setRunId('');
+        setRunStatus('');
+      }
+    }, 4000);
+
+    return () => clearInterval(timer);
+  }, [runId]);
+
   const onRunCrew = async () => {
     try {
       setIsSubmitting(true);
+      setIsBackgroundRunning(false);
       setServerError('');
+      setRunId('');
+      setRunStatus('');
 
       const response = await api.post('/seo-audit/run');
-      const doc = response?.data?.data || null;
+      const responseData = response?.data?.data;
+
+      const nextRunId = responseData?.runId;
+      const nextStatus = responseData?.status || 'queued';
+
+      if (nextRunId) {
+        setRunId(nextRunId);
+        setRunStatus(nextStatus);
+        setIsBackgroundRunning(true);
+
+        toast.success(response?.data?.message || 'SEO audit started in background.');
+        return;
+      }
+
+      // Backward compatibility if backend still returns completed doc.
+      const doc = responseData || null;
 
       setLatestDoc(doc);
 
@@ -76,16 +234,40 @@ const SeoAuditPage = () => {
       }
     } catch (error: any) {
       console.log(error);
-      setServerError(
-        error?.response?.data?.message ||
-          error?.response?.data?.detail ||
-          error?.response?.data?.error ||
-          'Failed to run SEO audit crew.'
-      );
+
+      const message = getErrorMessage(error, 'Failed to start SEO audit crew.');
+
+      setServerError(message);
+      toast.error(message);
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  const onCancelRun = async () => {
+    if (!runId) return;
+
+    try {
+      setServerError('');
+
+      await api.patch(`/background-runs/${runId}/cancel`);
+
+      setRunStatus('cancelled');
+      setIsBackgroundRunning(false);
+      setIsSubmitting(false);
+      setServerError('SEO audit task was cancelled.');
+      toast.error('SEO audit task was cancelled.');
+
+      setRunId('');
+    } catch (error: any) {
+      const message = getErrorMessage(error, 'Failed to stop SEO audit task.');
+
+      setServerError(message);
+      toast.error(message);
+    }
+  };
+
+  const isBusy = isSubmitting || isBackgroundRunning;
 
   return (
     <DashboardLayout>
@@ -97,24 +279,71 @@ const SeoAuditPage = () => {
                 <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">
                   SEO Audit
                 </h1>
+
                 <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-                  View the latest saved SEO audit first, then generate and save a new one.
+                  View the latest saved SEO audit first, then generate and save a new one in the background.
                 </p>
+
                 <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
                   Website: {WEBSITE_URL}
                 </p>
 
                 {latestDoc?.generatedAt && (
                   <p className="mt-3 text-xs text-gray-400 dark:text-gray-500">
-                    Latest generated:{' '}
-                    {new Date(latestDoc.generatedAt).toLocaleString()}
+                    Latest generated: {formatDate(latestDoc.generatedAt)}
                   </p>
+                )}
+
+                {latestDoc?.telegram && (
+                  <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                    Telegram:{' '}
+                    {latestDoc.telegram.published
+                      ? `Published${
+                          latestDoc.telegram.publishedAt
+                            ? ` at ${formatDate(latestDoc.telegram.publishedAt)}`
+                            : ''
+                        }`
+                      : latestDoc.telegram.error
+                        ? `Failed: ${latestDoc.telegram.error}`
+                        : 'Not published'}
+                  </p>
+                )}
+
+                {isBackgroundRunning && (
+                  <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900/40 dark:bg-blue-950/40 dark:text-blue-300">
+                    <div className="flex items-center gap-2">
+                      <span className="loading loading-spinner loading-sm" />
+                      <span>
+                        SEO audit is running in background. Status:{' '}
+                        <strong>{runStatusLabel}</strong>
+                      </span>
+                    </div>
+
+                    {runId && (
+                      <div className="mt-2 break-all font-mono text-xs opacity-80">
+                        Run ID: {runId}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 
-              <Button type="button" onClick={onRunCrew} isLoading={isSubmitting}>
-                Create SEO Audit
-              </Button>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                {isBackgroundRunning && (
+                  <Button type="button" onClick={onCancelRun}>
+                    Stop Task
+                  </Button>
+                )}
+
+                <Button
+                  type="button"
+                  onClick={onRunCrew}
+                  isLoading={isBusy}
+                  disabled={isBusy}
+                >
+                  {isBackgroundRunning ? 'Running in Background...' : 'Create SEO Audit'}
+                </Button>
+              </div>
             </div>
 
             {serverError && (
@@ -151,6 +380,7 @@ const SeoAuditPage = () => {
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
                 No saved SEO audit yet
               </h2>
+
               <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
                 Click the button once and the latest generated SEO report will be stored in MongoDB.
               </p>

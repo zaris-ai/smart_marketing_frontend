@@ -1,6 +1,6 @@
 import dynamic from 'next/dynamic';
 import type { ChangeEvent } from 'react';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
@@ -9,9 +9,12 @@ import { Button, Input } from '@/components/ui';
 import api from '@/lib/axios';
 import { withAuth } from '@/utils';
 
-const SmartBlogEditor = dynamic(() => import('@/components/editor/SmartBlogEditor'), {
-  ssr: false,
-});
+const SmartBlogEditor = dynamic(
+  () => import('@/components/editor/SmartBlogEditor'),
+  {
+    ssr: false,
+  }
+);
 
 type BlogCrewFormData = {
   title: string;
@@ -36,6 +39,25 @@ type AiBlogDoc = {
   status: 'draft' | 'published';
   createdAt?: string;
   updatedAt?: string;
+};
+
+type BackgroundRun = {
+  _id: string;
+  crewName: string;
+  title?: string;
+  status: 'queued' | 'running' | 'success' | 'failed';
+  result?: any;
+  error?: {
+    message?: string;
+    stack?: string;
+  };
+  savedRecord?: {
+    model?: string | null;
+    id?: string | null;
+  } | null;
+  createdAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 };
 
 function splitKeywords(value: string) {
@@ -113,6 +135,10 @@ const BlogPage = () => {
   const [editorHtml, setEditorHtml] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
+  const [runId, setRunId] = useState('');
+  const [runStatus, setRunStatus] = useState('');
+  const [isBackgroundRunning, setIsBackgroundRunning] = useState(false);
+
   const [editableTitle, setEditableTitle] = useState('');
   const [editableMetaDescription, setEditableMetaDescription] = useState('');
   const [editableExcerpt, setEditableExcerpt] = useState('');
@@ -132,6 +158,19 @@ const BlogPage = () => {
     },
   });
 
+  const isBusy = isSubmitting || isBackgroundRunning;
+
+  const runStatusLabel = useMemo(() => {
+    if (!runId) return '';
+
+    if (runStatus === 'queued') return 'Queued';
+    if (runStatus === 'running') return 'Running';
+    if (runStatus === 'success') return 'Completed';
+    if (runStatus === 'failed') return 'Failed';
+
+    return runStatus || 'Queued';
+  }, [runId, runStatus]);
+
   const hydrateEditorFromBlog = (nextBlog: AiBlogDoc) => {
     setBlog(nextBlog);
     setEditorHtml(nextBlog.contentHtml || '');
@@ -141,13 +180,87 @@ const BlogPage = () => {
     setEditableKeywords((nextBlog.suggestedKeywords || []).join(', '));
   };
 
-  const onSubmit = async (data: BlogCrewFormData) => {
-    const toastId = toast.loading('Blog crew is running...');
+  useEffect(() => {
+    if (!runId) return;
 
+    const timer = setInterval(async () => {
+      try {
+        const response = await api.get(`/background-runs/${runId}`);
+        const run: BackgroundRun | undefined = response?.data?.data;
+
+        if (!run) return;
+
+        setRunStatus(run.status || '');
+
+        if (run.status === 'success') {
+          clearInterval(timer);
+          setIsBackgroundRunning(false);
+
+          const savedBlogId = run.savedRecord?.id;
+
+          if (!savedBlogId) {
+            throw new Error(
+              'Blog generation completed, but backend did not attach savedRecord.id.'
+            );
+          }
+
+          const blogResponse = await api.get(`/blogs/${savedBlogId}`);
+          const createdBlog = extractBlogFromResponse(blogResponse);
+
+          if (!createdBlog) {
+            throw new Error(
+              'Blog was created, but API did not return the blog document.'
+            );
+          }
+
+          hydrateEditorFromBlog(createdBlog);
+
+          toast.success('Blog generated and saved as draft.');
+
+          setRunId('');
+          setRunStatus('');
+        }
+
+        if (run.status === 'failed') {
+          clearInterval(timer);
+          setIsBackgroundRunning(false);
+
+          const message = run?.error?.message || 'Blog generation failed.';
+
+          setServerError(message);
+          toast.error(message);
+
+          setRunId('');
+          setRunStatus('');
+        }
+      } catch (error: any) {
+        clearInterval(timer);
+        setIsBackgroundRunning(false);
+
+        const message = getErrorMessage(
+          error,
+          'Blog completed, but the saved blog could not be loaded.'
+        );
+
+        setServerError(message);
+        toast.error(message);
+
+        setRunId('');
+        setRunStatus('');
+      }
+    }, 4000);
+
+    return () => clearInterval(timer);
+  }, [runId]);
+
+  const onSubmit = async (data: BlogCrewFormData) => {
     try {
       setServerError('');
       setBlog(null);
       setEditorHtml('');
+      setRunId('');
+      setRunStatus('');
+      setIsBackgroundRunning(false);
 
       const response = await api.post('/blogs', {
         title: data.title.trim(),
@@ -157,39 +270,38 @@ const BlogPage = () => {
         keywords: splitKeywords(data.keywords),
       });
 
-      console.log('BLOG CREATE RESPONSE:', response.data);
+      const responseData = response?.data?.data;
+      const nextRunId = responseData?.runId;
+      const nextStatus = responseData?.status || 'queued';
+
+      if (nextRunId) {
+        setRunId(nextRunId);
+        setRunStatus(nextStatus);
+        setIsBackgroundRunning(true);
+
+        toast.success(
+          response?.data?.message || 'Blog generation started in background.'
+        );
+
+        return;
+      }
 
       const createdBlog = extractBlogFromResponse(response);
 
       if (!createdBlog) {
         throw new Error(
-          'API did not return a blog document or blog content.'
+          'API did not return a blog document or background run ID.'
         );
       }
 
       hydrateEditorFromBlog(createdBlog);
 
-      if (!hasRealMongoId(createdBlog._id)) {
-        toast.warning(
-          'Blog generated, but backend did not return a real MongoDB _id. Save and publish will not work until backend returns data.blog._id.',
-          { id: toastId }
-        );
-        return;
-      }
-
-      toast.success('Blog generated and saved as draft.', {
-        id: toastId,
-      });
+      toast.success('Blog generated and saved as draft.');
     } catch (error: any) {
-      console.log(error);
-
-      const message = getErrorMessage(error, 'Failed to run blog crew.');
+      const message = getErrorMessage(error, 'Failed to start blog crew.');
 
       setServerError(message);
-
-      toast.error(message, {
-        id: toastId,
-      });
+      toast.error(message);
     }
   };
 
@@ -200,7 +312,9 @@ const BlogPage = () => {
     }
 
     if (!hasRealMongoId(blog._id)) {
-      toast.error('Cannot save. Backend did not return a valid MongoDB blog _id.');
+      toast.error(
+        'Cannot save. Backend did not return a valid MongoDB blog _id.'
+      );
       return;
     }
 
@@ -236,8 +350,6 @@ const BlogPage = () => {
         id: toastId,
       });
     } catch (error: any) {
-      console.log(error);
-
       const message = getErrorMessage(error, 'Failed to save blog.');
 
       setServerError(message);
@@ -257,7 +369,9 @@ const BlogPage = () => {
     }
 
     if (!hasRealMongoId(blog._id)) {
-      toast.error('Cannot publish. Backend did not return a valid MongoDB blog _id.');
+      toast.error(
+        'Cannot publish. Backend did not return a valid MongoDB blog _id.'
+      );
       return;
     }
 
@@ -294,8 +408,6 @@ const BlogPage = () => {
         id: toastId,
       });
     } catch (error: any) {
-      console.log(error);
-
       const message = getErrorMessage(error, 'Failed to publish blog.');
 
       setServerError(message);
@@ -331,6 +443,24 @@ const BlogPage = () => {
               </div>
             )}
 
+            {isBackgroundRunning && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+                <div className="flex items-center gap-2">
+                  <span className="loading loading-spinner loading-sm" />
+                  <span>
+                    Blog generation is running in background. Status:{' '}
+                    <strong>{runStatusLabel}</strong>
+                  </span>
+                </div>
+
+                {runId && (
+                  <div className="mt-2 break-all font-mono text-xs opacity-80">
+                    Run ID: {runId}
+                  </div>
+                )}
+              </div>
+            )}
+
             <Input
               {...register('title')}
               type="text"
@@ -339,6 +469,7 @@ const BlogPage = () => {
               error={errors.title?.message}
               dir="ltr"
               autoFocus
+              disabled={isBusy}
             />
 
             <Input
@@ -354,6 +485,7 @@ const BlogPage = () => {
               placeholder="How should a SaaS startup price an analytics product?"
               error={errors.topic?.message}
               dir="ltr"
+              disabled={isBusy}
             />
 
             <div>
@@ -365,8 +497,9 @@ const BlogPage = () => {
                 {...register('keywords')}
                 rows={3}
                 placeholder="analytics dashboard, Shopify analytics, product performance"
-                className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-gray-400 dark:border-gray-800 dark:bg-gray-950 dark:text-white"
+                className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-gray-400 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-800 dark:bg-gray-950 dark:text-white"
                 dir="ltr"
+                disabled={isBusy}
               />
 
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -383,6 +516,7 @@ const BlogPage = () => {
               placeholder="founder"
               error={errors.audience?.message}
               dir="ltr"
+              disabled={isBusy}
             />
 
             <Input
@@ -394,10 +528,13 @@ const BlogPage = () => {
               placeholder="direct and practical"
               error={errors.tone?.message}
               dir="ltr"
+              disabled={isBusy}
             />
 
-            <Button type="submit" isLoading={isSubmitting}>
-              Generate Blog
+            <Button type="submit" isLoading={isBusy} disabled={isBusy}>
+              {isBackgroundRunning
+                ? 'Running in Background...'
+                : 'Generate Blog'}
             </Button>
           </form>
 
@@ -424,8 +561,9 @@ const BlogPage = () => {
 
                     {!canPersistBlog && (
                       <p className="mt-2 rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400">
-                        Backend returned generated content but not a valid MongoDB blog ID.
-                        Save and publish are disabled until the API returns data.blog._id.
+                        Backend returned generated content but not a valid
+                        MongoDB blog ID. Save and publish are disabled until the
+                        API returns data.blog._id.
                       </p>
                     )}
                   </div>
@@ -435,7 +573,9 @@ const BlogPage = () => {
                       type="button"
                       onClick={handleSaveBlog}
                       isLoading={isSaving}
-                      disabled={!canPersistBlog || isSaving}
+                      disabled={
+                        !canPersistBlog || isSaving || isBackgroundRunning
+                      }
                     >
                       Save Changes
                     </Button>
@@ -444,7 +584,9 @@ const BlogPage = () => {
                       type="button"
                       onClick={handlePublishBlog}
                       isLoading={isSaving}
-                      disabled={!canPersistBlog || isSaving}
+                      disabled={
+                        !canPersistBlog || isSaving || isBackgroundRunning
+                      }
                     >
                       Save & Publish
                     </Button>
@@ -524,7 +666,8 @@ const BlogPage = () => {
                   </h2>
 
                   <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                    Edit the generated content and save it back to the same AiBlog document.
+                    Edit the generated content and save it back to the same
+                    AiBlog document.
                   </p>
                 </div>
 

@@ -1,7 +1,7 @@
 import { DashboardLayout } from '@/components/layouts';
 import { Button, Input } from '@/components/ui';
 import api from '@/lib/axios';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import ReactMarkdown from 'react-markdown';
 import { saveAs } from 'file-saver';
@@ -39,6 +39,21 @@ type ResearchViewResult = {
   reviewer_notes: string;
   tasks_output: string[];
   raw_result: any;
+};
+
+type BackgroundRun = {
+  _id: string;
+  crewName: string;
+  title?: string;
+  status: 'queued' | 'running' | 'success' | 'failed';
+  result?: any;
+  error?: {
+    message?: string;
+    stack?: string;
+  };
+  createdAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 };
 
 const exampleScenarios = [
@@ -85,6 +100,65 @@ const exampleScenarios = [
     },
   },
 ];
+
+function getErrorMessage(error: any, fallback: string) {
+  return (
+    error?.response?.data?.message ||
+    error?.response?.data?.detail ||
+    error?.response?.data?.error ||
+    error?.message ||
+    fallback
+  );
+}
+
+function parseResearchRunResult(rawRunResult: any): ResearchViewResult {
+  const rawResult = rawRunResult || {};
+
+  const rawContent =
+    rawResult?.result?.content ||
+    rawResult?.content ||
+    rawResult?.rawContent ||
+    '';
+
+  const tasksOutput = Array.isArray(rawResult?.result?.tasks_output)
+    ? rawResult.result.tasks_output
+    : Array.isArray(rawResult?.tasks_output)
+      ? rawResult.tasks_output
+      : [];
+
+  let parsedContent: ParsedResearchContent = {};
+
+  if (typeof rawContent === 'string' && rawContent.trim()) {
+    try {
+      parsedContent = JSON.parse(rawContent);
+    } catch {
+      const start = rawContent.indexOf('{');
+      const end = rawContent.lastIndexOf('}');
+
+      if (start !== -1 && end !== -1 && end > start) {
+        try {
+          parsedContent = JSON.parse(rawContent.slice(start, end + 1));
+        } catch {
+          parsedContent = {};
+        }
+      }
+    }
+  } else if (rawContent && typeof rawContent === 'object') {
+    parsedContent = rawContent;
+  }
+
+  return {
+    approved: Boolean(parsedContent?.approved),
+    title: parsedContent?.title || '',
+    report_markdown: parsedContent?.report_markdown || '',
+    sources: Array.isArray(parsedContent?.sources)
+      ? parsedContent.sources
+      : [],
+    reviewer_notes: parsedContent?.reviewer_notes || '',
+    tasks_output: tasksOutput,
+    raw_result: rawResult,
+  };
+}
 
 const markdownToDocxParagraphs = (markdown: string) => {
   const lines = markdown.split('\n');
@@ -182,16 +256,9 @@ const ResearchPage = () => {
   const [result, setResult] = useState<ResearchViewResult | null>(null);
   const [isExampleModalOpen, setIsExampleModalOpen] = useState(false);
 
-
-  const handleExampleClick = (example: any) => {
-    Object.entries(example.data).forEach(([key, value]) => {
-      setValue(key as any, value);
-    });
-
-    setIsExampleModalOpen(false);
-    setResult(null);
-    setServerError('');
-  };
+  const [runId, setRunId] = useState('');
+  const [runStatus, setRunStatus] = useState('');
+  const [isBackgroundRunning, setIsBackgroundRunning] = useState(false);
 
   const {
     register,
@@ -209,10 +276,101 @@ const ResearchPage = () => {
     },
   });
 
+  const isBusy = isSubmitting || isBackgroundRunning;
+
+  const runStatusLabel = useMemo(() => {
+    if (!runId) return '';
+
+    if (runStatus === 'queued') return 'Queued';
+    if (runStatus === 'running') return 'Running';
+    if (runStatus === 'success') return 'Completed';
+    if (runStatus === 'failed') return 'Failed';
+
+    return runStatus || 'Queued';
+  }, [runId, runStatus]);
+
+  const handleExampleClick = (example: any) => {
+    Object.entries(example.data).forEach(([key, value]) => {
+      setValue(key as keyof ResearchCrewFormData, value as string);
+    });
+
+    setIsExampleModalOpen(false);
+    setResult(null);
+    setServerError('');
+    setRunId('');
+    setRunStatus('');
+    setIsBackgroundRunning(false);
+  };
+
+  useEffect(() => {
+    if (!runId) return;
+
+    const timer = setInterval(async () => {
+      try {
+        const response = await api.get(`/background-runs/${runId}`);
+        const run: BackgroundRun | undefined = response?.data?.data;
+
+        if (!run) return;
+
+        setRunStatus(run.status || '');
+
+        if (run.status === 'success') {
+          clearInterval(timer);
+          setIsBackgroundRunning(false);
+
+          const parsedResult = parseResearchRunResult(run.result);
+
+          if (!parsedResult.report_markdown) {
+            throw new Error(
+              'Research completed, but the report markdown was empty or invalid.'
+            );
+          }
+
+          setResult(parsedResult);
+
+          setRunId('');
+          setRunStatus('');
+
+          return;
+        }
+
+        if (run.status === 'failed') {
+          clearInterval(timer);
+          setIsBackgroundRunning(false);
+
+          const message = run?.error?.message || 'Research background task failed.';
+
+          setServerError(message);
+          setRunId('');
+          setRunStatus('');
+
+          return;
+        }
+      } catch (error: any) {
+        clearInterval(timer);
+        setIsBackgroundRunning(false);
+
+        const message = getErrorMessage(
+          error,
+          'Research completed, but the result could not be loaded.'
+        );
+
+        setServerError(message);
+        setRunId('');
+        setRunStatus('');
+      }
+    }, 4000);
+
+    return () => clearInterval(timer);
+  }, [runId]);
+
   const onSubmit = async (data: ResearchCrewFormData) => {
     try {
       setServerError('');
       setResult(null);
+      setRunId('');
+      setRunStatus('');
+      setIsBackgroundRunning(false);
 
       const response = await api.post('/research', {
         topic: data.topic,
@@ -223,44 +381,27 @@ const ResearchPage = () => {
         product_context: data.product_context,
       });
 
-      const apiData = response?.data?.data;
-      const rawResult = apiData?.result || {};
-      const rawContent = rawResult?.content;
-      const tasksOutput = Array.isArray(rawResult?.tasks_output)
-        ? rawResult.tasks_output
-        : [];
+      const responseData = response?.data?.data;
+      const nextRunId = responseData?.runId;
+      const nextStatus = responseData?.status || 'queued';
 
-      let parsedContent: ParsedResearchContent = {};
-
-      if (typeof rawContent === 'string' && rawContent.trim()) {
-        try {
-          parsedContent = JSON.parse(rawContent);
-        } catch (e) {
-          console.log('Failed to parse result.content as JSON', e);
-        }
-      } else if (rawContent && typeof rawContent === 'object') {
-        parsedContent = rawContent;
+      if (nextRunId) {
+        setRunId(nextRunId);
+        setRunStatus(nextStatus);
+        setIsBackgroundRunning(true);
+        return;
       }
 
-      setResult({
-        approved: Boolean(parsedContent?.approved),
-        title: parsedContent?.title || '',
-        report_markdown: parsedContent?.report_markdown || '',
-        sources: Array.isArray(parsedContent?.sources)
-          ? parsedContent.sources
-          : [],
-        reviewer_notes: parsedContent?.reviewer_notes || '',
-        tasks_output: tasksOutput,
-        raw_result: rawResult,
-      });
+      const fallbackResult = parseResearchRunResult(responseData);
+
+      if (!fallbackResult.report_markdown) {
+        throw new Error('API did not return a research result or background run ID.');
+      }
+
+      setResult(fallbackResult);
     } catch (error: any) {
-      console.log(error);
-      setServerError(
-        error?.response?.data?.message ||
-        error?.response?.data?.detail ||
-        error?.response?.data?.error ||
-        'Failed to run research crew.'
-      );
+      const message = getErrorMessage(error, 'Failed to start research crew.');
+      setServerError(message);
     }
   };
 
@@ -305,60 +446,60 @@ const ResearchPage = () => {
 
             ...(result.reviewer_notes
               ? [
-                new Paragraph({
-                  children: [
-                    new TextRun({
-                      text: `Reviewer Notes: ${result.reviewer_notes}`,
-                      italics: true,
-                    }),
-                  ],
-                  spacing: { after: 200 },
-                }),
-              ]
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: `Reviewer Notes: ${result.reviewer_notes}`,
+                        italics: true,
+                      }),
+                    ],
+                    spacing: { after: 200 },
+                  }),
+                ]
               : []),
 
             ...markdownToDocxParagraphs(result.report_markdown),
 
             ...(result.sources.length > 0
               ? [
-                new Paragraph({
-                  children: [
-                    new TextRun({
-                      text: 'Sources',
-                      bold: true,
-                      size: 28,
-                    }),
-                  ],
-                  spacing: { before: 280, after: 160 },
-                }),
-                ...result.sources.flatMap((source) => [
                   new Paragraph({
                     children: [
                       new TextRun({
-                        text: source.title || source.url,
+                        text: 'Sources',
                         bold: true,
+                        size: 28,
                       }),
                     ],
-                    spacing: { after: 60 },
+                    spacing: { before: 280, after: 160 },
                   }),
-                  new Paragraph({
-                    text: source.url,
-                    spacing: { after: 60 },
-                  }),
-                  ...(source.note
-                    ? [
-                      new Paragraph({
-                        children: [
-                          new TextRun({
-                            text: source.note,
+                  ...result.sources.flatMap((source) => [
+                    new Paragraph({
+                      children: [
+                        new TextRun({
+                          text: source.title || source.url,
+                          bold: true,
+                        }),
+                      ],
+                      spacing: { after: 60 },
+                    }),
+                    new Paragraph({
+                      text: source.url,
+                      spacing: { after: 60 },
+                    }),
+                    ...(source.note
+                      ? [
+                          new Paragraph({
+                            children: [
+                              new TextRun({
+                                text: source.note,
+                              }),
+                            ],
+                            spacing: { after: 140 },
                           }),
-                        ],
-                        spacing: { after: 140 },
-                      }),
-                    ]
-                    : []),
-                ]),
-              ]
+                        ]
+                      : []),
+                  ]),
+                ]
               : []),
           ],
         },
@@ -375,39 +516,35 @@ const ResearchPage = () => {
 
   return (
     <DashboardLayout>
-
-      {/* modal */}
       <div className="mb-4 flex justify-end">
         <button
           type="button"
           className="btn btn-outline btn-sm"
           onClick={() => setIsExampleModalOpen(true)}
+          disabled={isBusy}
         >
           View Examples
         </button>
       </div>
+
       {isExampleModalOpen && (
         <div className="modal modal-open">
           <div className="modal-box max-w-3xl">
-            <h3 className="font-bold text-lg mb-2">
-              Example Use Cases
-            </h3>
+            <h3 className="mb-2 text-lg font-bold">Example Use Cases</h3>
 
-            <p className="text-sm text-gray-500 mb-6">
+            <p className="mb-6 text-sm text-gray-500">
               Choose a scenario to auto-fill the form.
             </p>
 
-            <div className="grid md:grid-cols-2 gap-4">
+            <div className="grid gap-4 md:grid-cols-2">
               {exampleScenarios.map((example, index) => (
                 <button
                   key={index}
                   type="button"
                   onClick={() => handleExampleClick(example)}
-                  className="text-left border border-gray-200 dark:border-gray-800 rounded-xl p-4 hover:border-primary hover:bg-base-200 transition"
+                  className="rounded-xl border border-gray-200 p-4 text-left transition hover:border-primary hover:bg-base-200 dark:border-gray-800"
                 >
-                  <h4 className="font-semibold mb-1">
-                    {example.title}
-                  </h4>
+                  <h4 className="mb-1 font-semibold">{example.title}</h4>
 
                   <p className="text-sm text-gray-500">
                     {example.description}
@@ -426,29 +563,47 @@ const ResearchPage = () => {
             </div>
           </div>
 
-          {/* backdrop */}
           <div
             className="modal-backdrop"
             onClick={() => setIsExampleModalOpen(false)}
           />
         </div>
       )}
-      {/* modal */}
+
       <div className="py-8" dir="ltr">
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm p-6 md:p-8">
+        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900 md:p-8">
           <div className="mb-6">
             <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">
               Research Assistant
             </h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-              Turn a rough topic into a specialized marketing research brief, run detailed research, and review the final moderated result.
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+              Turn a rough topic into a specialized marketing research brief,
+              run detailed research, and review the final moderated result.
             </p>
           </div>
 
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
             {serverError && (
-              <div className="rounded-lg bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-600 dark:text-red-400">
+              <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">
                 {serverError}
+              </div>
+            )}
+
+            {isBackgroundRunning && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+                <div className="flex items-center gap-2">
+                  <span className="loading loading-spinner loading-sm" />
+                  <span>
+                    Research is running in background. Status:{' '}
+                    <strong>{runStatusLabel}</strong>
+                  </span>
+                </div>
+
+                {runId && (
+                  <div className="mt-2 break-all font-mono text-xs opacity-80">
+                    Run ID: {runId}
+                  </div>
+                )}
               </div>
             )}
 
@@ -466,6 +621,7 @@ const ResearchPage = () => {
               error={errors.topic?.message}
               dir="ltr"
               autoFocus
+              disabled={isBusy}
             />
 
             <Input
@@ -477,6 +633,7 @@ const ResearchPage = () => {
               placeholder="marketing manager"
               error={errors.audience?.message}
               dir="ltr"
+              disabled={isBusy}
             />
 
             <Input
@@ -488,6 +645,7 @@ const ResearchPage = () => {
               placeholder="US B2B SaaS"
               error={errors.market?.message}
               dir="ltr"
+              disabled={isBusy}
             />
 
             <Input
@@ -497,6 +655,7 @@ const ResearchPage = () => {
               placeholder="We sell software to B2B SaaS teams."
               error={errors.business_context?.message}
               dir="ltr"
+              disabled={isBusy}
             />
 
             <Input
@@ -506,6 +665,7 @@ const ResearchPage = () => {
               placeholder="Increase demo-to-paid conversion and improve retention."
               error={errors.goal?.message}
               dir="ltr"
+              disabled={isBusy}
             />
 
             <Input
@@ -515,10 +675,13 @@ const ResearchPage = () => {
               placeholder="CRM platform for early-stage SaaS sales teams."
               error={errors.product_context?.message}
               dir="ltr"
+              disabled={isBusy}
             />
 
-            <Button type="submit" isLoading={isSubmitting}>
-              Run Research Crew
+            <Button type="submit" isLoading={isBusy} disabled={isBusy}>
+              {isBackgroundRunning
+                ? 'Running in Background...'
+                : 'Run Research Crew'}
             </Button>
           </form>
 
@@ -533,7 +696,7 @@ const ResearchPage = () => {
                 </Button>
               </div>
 
-              <div className="bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-5">
+              <div className="space-y-5 rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-950">
                 <div>
                   <span className="text-sm font-medium text-gray-500 dark:text-gray-400">
                     Moderator Status:
@@ -541,8 +704,8 @@ const ResearchPage = () => {
                   <span
                     className={
                       result.approved
-                        ? 'text-green-600 dark:text-green-400 font-medium'
-                        : 'text-red-600 dark:text-red-400 font-medium'
+                        ? 'font-medium text-green-600 dark:text-green-400'
+                        : 'font-medium text-red-600 dark:text-red-400'
                     }
                   >
                     {result.approved ? 'Approved' : 'Not Approved'}
@@ -575,26 +738,26 @@ const ResearchPage = () => {
                     </div>
                   )}
 
-                  <div className="prose prose-sm md:prose-base max-w-none dark:prose-invert prose-headings:font-semibold prose-a:text-blue-600 dark:prose-a:text-blue-400">
+                  <div className="prose prose-sm max-w-none prose-headings:font-semibold prose-a:text-blue-600 dark:prose-invert dark:prose-a:text-blue-400 md:prose-base">
                     <ReactMarkdown>{result.report_markdown}</ReactMarkdown>
                   </div>
 
                   {result.sources.length > 0 && (
                     <div>
-                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
+                      <h3 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
                         Sources
                       </h3>
                       <div className="space-y-3">
                         {result.sources.map((source, index) => (
                           <div
                             key={`${source.url}-${index}`}
-                            className="border border-gray-200 dark:border-gray-800 rounded-lg p-3"
+                            className="rounded-lg border border-gray-200 p-3 dark:border-gray-800"
                           >
                             <a
                               href={source.url}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-sm font-medium text-blue-600 dark:text-blue-400 break-all"
+                              className="break-all text-sm font-medium text-blue-600 dark:text-blue-400"
                             >
                               {source.title || source.url}
                             </a>
@@ -614,7 +777,7 @@ const ResearchPage = () => {
 
               {result.tasks_output.length > 0 && (
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
+                  <h3 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
                     Tasks Output
                   </h3>
 
@@ -622,12 +785,12 @@ const ResearchPage = () => {
                     {result.tasks_output.map((taskOutput, index) => (
                       <div
                         key={index}
-                        className="bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl p-4"
+                        className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-950"
                       >
                         <div className="mb-2 text-sm font-medium text-gray-500 dark:text-gray-400">
                           Task {index + 1}
                         </div>
-                        <pre className="text-sm overflow-x-auto whitespace-pre-wrap text-gray-800 dark:text-gray-200">
+                        <pre className="overflow-x-auto whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200">
                           {taskOutput}
                         </pre>
                       </div>
@@ -637,10 +800,10 @@ const ResearchPage = () => {
               )}
 
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
+                <h3 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
                   Raw Result
                 </h3>
-                <pre className="bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl p-4 text-sm overflow-x-auto whitespace-pre-wrap text-gray-800 dark:text-gray-200">
+                <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-800 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-200">
                   {JSON.stringify(result.raw_result, null, 2)}
                 </pre>
               </div>

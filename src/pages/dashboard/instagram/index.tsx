@@ -2,7 +2,28 @@ import { DashboardLayout } from '@/components/layouts';
 import { Button } from '@/components/ui';
 import api from '@/lib/axios';
 import { withAuth } from '@/utils';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
+
+type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled' | 'canceled';
+
+type BackgroundRun = {
+  _id: string;
+  crewName: string;
+  title?: string;
+  status: RunStatus;
+  error?: {
+    message?: string;
+    stack?: string;
+  };
+  savedRecord?: {
+    model?: string | null;
+    id?: string | null;
+  } | null;
+  createdAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+};
 
 type StoryFrame = {
   frame: number;
@@ -71,7 +92,7 @@ type InstagramStoryForm = {
 
 const APP_CONTEXT = {
   brand_name: 'Arka Smart Analyzer',
-  app_website_url: 'http://web.arkaanalyzer.com/',
+  app_website_url: 'https://web.arkaanalyzer.com/',
   shopify_app_store_url: 'https://apps.shopify.com/arka-smart-analyzer',
   product_or_service:
     'Shopify analytics app for product, pricing, inventory, and store performance insights.',
@@ -99,14 +120,33 @@ const inputClass =
 const labelClass =
   'mb-2 block text-sm font-medium text-gray-800 dark:text-gray-200';
 
-const formatDate = (value?: string) => {
+function formatDate(value?: string) {
   if (!value) return '—';
 
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
 
   return parsed.toLocaleString();
-};
+}
+
+function getErrorMessage(error: any, fallback: string) {
+  return (
+    error?.response?.data?.message ||
+    error?.response?.data?.detail ||
+    error?.response?.data?.error ||
+    error?.message ||
+    fallback
+  );
+}
+
+function extractRunFromResponse(response: any): BackgroundRun | null {
+  return (
+    response?.data?.data?.run ||
+    response?.data?.run ||
+    response?.data?.data ||
+    null
+  );
+}
 
 const InstagramStoryIdeasPage = () => {
   const [form, setForm] = useState<InstagramStoryForm>(initialForm);
@@ -114,12 +154,36 @@ const InstagramStoryIdeasPage = () => {
   const [selectedRun, setSelectedRun] = useState<InstagramStoryRun | null>(null);
   const [selectedIdeaIndex, setSelectedIdeaIndex] = useState(0);
 
+  const [backgroundRunId, setBackgroundRunId] = useState('');
+  const [backgroundStatus, setBackgroundStatus] = useState<RunStatus | ''>('');
+
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
   const selectedIdea = selectedRun?.ideas?.[selectedIdeaIndex] || null;
+
+  const isBackgroundRunning = useMemo(
+    () =>
+      Boolean(backgroundRunId) &&
+      ['queued', 'running'].includes(backgroundStatus || 'queued'),
+    [backgroundRunId, backgroundStatus]
+  );
+
+  const runStatusLabel = useMemo(() => {
+    if (!backgroundRunId) return '';
+
+    if (backgroundStatus === 'queued') return 'Queued';
+    if (backgroundStatus === 'running') return 'Running';
+    if (backgroundStatus === 'success') return 'Completed';
+    if (backgroundStatus === 'failed') return 'Failed';
+    if (backgroundStatus === 'cancelled' || backgroundStatus === 'canceled') {
+      return 'Cancelled';
+    }
+
+    return 'Queued';
+  }, [backgroundRunId, backgroundStatus]);
 
   const updateField = <K extends keyof InstagramStoryForm>(
     field: K,
@@ -146,7 +210,19 @@ const InstagramStoryIdeasPage = () => {
     return '';
   };
 
-  const loadRuns = async () => {
+  const fetchRunById = async (id: string) => {
+    const response = await api.get(`/instagram-agent/story-ideas/${id}`);
+    const doc: InstagramStoryRun | null = response?.data?.data || null;
+
+    if (doc?._id) {
+      setSelectedRun(doc);
+      setSelectedIdeaIndex(0);
+    }
+
+    return doc;
+  };
+
+  const loadRuns = async (preferredId?: string) => {
     try {
       setLoadingRuns(true);
       setError('');
@@ -162,21 +238,110 @@ const InstagramStoryIdeasPage = () => {
 
       setRuns(items);
 
+      if (preferredId) {
+        await fetchRunById(preferredId);
+        return;
+      }
+
       if (!selectedRun && items.length > 0) {
         setSelectedRun(items[0]);
         setSelectedIdeaIndex(0);
       }
     } catch (err: any) {
-      setError(
-        err?.response?.data?.error ||
-          err?.response?.data?.message ||
-          err?.message ||
-          'Failed to load previous Instagram Story runs.'
+      const message = getErrorMessage(
+        err,
+        'Failed to load previous Instagram Story runs.'
       );
+
+      setError(message);
+      toast.error(message);
     } finally {
       setLoadingRuns(false);
     }
   };
+
+  useEffect(() => {
+    loadRuns();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!backgroundRunId) return;
+
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await api.get(`/background-runs/${backgroundRunId}`);
+        const run = extractRunFromResponse(response);
+
+        if (!run?._id) return;
+
+        setBackgroundStatus(run.status);
+
+        if (run.status === 'success') {
+          window.clearInterval(timer);
+
+          const savedId = run.savedRecord?.id || '';
+
+          setGenerating(false);
+          setBackgroundRunId('');
+          setBackgroundStatus('');
+
+          if (savedId) {
+            await loadRuns(savedId);
+            toast.success('Instagram Story ideas generated and saved.');
+          } else {
+            await loadRuns();
+            toast.warning(
+              'Generation finished, but saved document ID was not attached to the background run.'
+            );
+          }
+
+          return;
+        }
+
+        if (run.status === 'failed') {
+          window.clearInterval(timer);
+
+          const message =
+            run.error?.message || 'Instagram Story background generation failed.';
+
+          setGenerating(false);
+          setBackgroundRunId('');
+          setBackgroundStatus('');
+          setError(message);
+          toast.error(message);
+
+          return;
+        }
+
+        if (run.status === 'cancelled' || run.status === 'canceled') {
+          window.clearInterval(timer);
+
+          setGenerating(false);
+          setBackgroundRunId('');
+          setBackgroundStatus('');
+          setError('Instagram Story generation was cancelled.');
+          toast.error('Instagram Story generation was cancelled.');
+        }
+      } catch (err: any) {
+        window.clearInterval(timer);
+
+        const message = getErrorMessage(
+          err,
+          'Could not read background run status.'
+        );
+
+        setGenerating(false);
+        setBackgroundRunId('');
+        setBackgroundStatus('');
+        setError(message);
+        toast.error(message);
+      }
+    }, 4000);
+
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backgroundRunId]);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -184,6 +349,7 @@ const InstagramStoryIdeasPage = () => {
     const validationError = validateForm();
     if (validationError) {
       setError(validationError);
+      toast.error(validationError);
       return;
     }
 
@@ -192,24 +358,25 @@ const InstagramStoryIdeasPage = () => {
       setError('');
 
       const response = await api.post('/instagram-agent/story-ideas', form);
-      const data: InstagramStoryRun = response?.data?.data;
+      const run = extractRunFromResponse(response);
 
-      if (!data || !Array.isArray(data.ideas)) {
-        throw new Error('Invalid response from Instagram Story agent.');
+      if (!run?._id) {
+        throw new Error('Backend did not return a background run ID.');
       }
 
-      setRuns((prev) => [data, ...prev]);
-      setSelectedRun(data);
-      setSelectedIdeaIndex(0);
+      setBackgroundRunId(run._id);
+      setBackgroundStatus(run.status || 'queued');
+
+      toast.success('Instagram Story generation started in background.');
     } catch (err: any) {
-      setError(
-        err?.response?.data?.error ||
-          err?.response?.data?.message ||
-          err?.message ||
-          'Failed to generate Instagram Story ideas.'
+      const message = getErrorMessage(
+        err,
+        'Failed to start Instagram Story generation.'
       );
-    } finally {
+
       setGenerating(false);
+      setError(message);
+      toast.error(message);
     }
   };
 
@@ -226,25 +393,33 @@ const InstagramStoryIdeasPage = () => {
   const handleDeleteRun = async () => {
     if (!selectedRun?._id) return;
 
+    const confirmed = window.confirm('Delete this Instagram Story run permanently?');
+    if (!confirmed) return;
+
     try {
       setDeleting(true);
       setError('');
 
-      await api.delete(`/instagram-agent/story-ideas/${selectedRun._id}`);
+      const deletingId = selectedRun._id;
+
+      await api.delete(`/instagram-agent/story-ideas/${deletingId}`);
 
       setRuns((prev) => {
-        const nextRuns = prev.filter((item) => item._id !== selectedRun._id);
+        const nextRuns = prev.filter((item) => item._id !== deletingId);
         setSelectedRun(nextRuns[0] || null);
         setSelectedIdeaIndex(0);
         return nextRuns;
       });
+
+      toast.success('Instagram Story run deleted.');
     } catch (err: any) {
-      setError(
-        err?.response?.data?.error ||
-          err?.response?.data?.message ||
-          err?.message ||
-          'Failed to delete Instagram Story run.'
+      const message = getErrorMessage(
+        err,
+        'Failed to delete Instagram Story run.'
       );
+
+      setError(message);
+      toast.error(message);
     } finally {
       setDeleting(false);
     }
@@ -255,14 +430,12 @@ const InstagramStoryIdeasPage = () => {
 
     try {
       await navigator.clipboard.writeText(value);
+      toast.success('Copied.');
     } catch {
       setError('Failed to copy text.');
+      toast.error('Failed to copy text.');
     }
   };
-
-  useEffect(() => {
-    loadRuns();
-  }, []);
 
   return (
     <DashboardLayout>
@@ -275,6 +448,17 @@ const InstagramStoryIdeasPage = () => {
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
               Generate, save, and review Instagram Story ideas for Arka Smart Analyzer.
             </p>
+
+            {isBackgroundRunning && (
+              <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-300">
+                <div className="font-medium">
+                  Background task: {runStatusLabel}
+                </div>
+                <div className="mt-1 break-all font-mono text-xs opacity-80">
+                  Run ID: {backgroundRunId}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-3">
@@ -284,7 +468,7 @@ const InstagramStoryIdeasPage = () => {
               </p>
             </div>
 
-            <Button type="button" onClick={loadRuns} disabled={loadingRuns || generating}>
+            <Button type="button" onClick={() => loadRuns()} disabled={loadingRuns || generating}>
               {loadingRuns ? 'Loading...' : 'Refresh'}
             </Button>
           </div>
@@ -307,7 +491,7 @@ const InstagramStoryIdeasPage = () => {
                   New Campaign
                 </h2>
                 <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  Product context is fixed. Each generated result is saved in MongoDB.
+                  Product context is fixed. The job runs in background and saves the result in MongoDB.
                 </p>
               </div>
 
@@ -362,6 +546,7 @@ const InstagramStoryIdeasPage = () => {
                   onChange={(event) =>
                     updateField('target_audience', event.target.value)
                   }
+                  disabled={generating}
                 />
               </div>
 
@@ -373,6 +558,7 @@ const InstagramStoryIdeasPage = () => {
                   onChange={(event) =>
                     updateField('campaign_goal', event.target.value)
                   }
+                  disabled={generating}
                 />
               </div>
 
@@ -384,6 +570,7 @@ const InstagramStoryIdeasPage = () => {
                   onChange={(event) =>
                     updateField('campaign_name', event.target.value)
                   }
+                  disabled={generating}
                 />
               </div>
 
@@ -393,6 +580,7 @@ const InstagramStoryIdeasPage = () => {
                   className={inputClass}
                   value={form.brand_voice}
                   onChange={(event) => updateField('brand_voice', event.target.value)}
+                  disabled={generating}
                 />
               </div>
 
@@ -402,6 +590,7 @@ const InstagramStoryIdeasPage = () => {
                   className={inputClass}
                   value={form.offer}
                   onChange={(event) => updateField('offer', event.target.value)}
+                  disabled={generating}
                 />
               </div>
 
@@ -412,6 +601,7 @@ const InstagramStoryIdeasPage = () => {
                   rows={3}
                   value={form.key_message}
                   onChange={(event) => updateField('key_message', event.target.value)}
+                  disabled={generating}
                 />
               </div>
 
@@ -422,6 +612,7 @@ const InstagramStoryIdeasPage = () => {
                   rows={3}
                   value={form.visual_style}
                   onChange={(event) => updateField('visual_style', event.target.value)}
+                  disabled={generating}
                 />
               </div>
 
@@ -432,6 +623,7 @@ const InstagramStoryIdeasPage = () => {
                     className={inputClass}
                     value={form.language}
                     onChange={(event) => updateField('language', event.target.value)}
+                    disabled={generating}
                   />
                 </div>
 
@@ -446,6 +638,7 @@ const InstagramStoryIdeasPage = () => {
                     onChange={(event) =>
                       updateField('number_of_ideas', Number(event.target.value))
                     }
+                    disabled={generating}
                   />
                 </div>
 
@@ -460,6 +653,7 @@ const InstagramStoryIdeasPage = () => {
                     onChange={(event) =>
                       updateField('story_length_seconds', Number(event.target.value))
                     }
+                    disabled={generating}
                   />
                 </div>
               </div>
@@ -471,12 +665,13 @@ const InstagramStoryIdeasPage = () => {
                   rows={4}
                   value={form.notes}
                   onChange={(event) => updateField('notes', event.target.value)}
+                  disabled={generating}
                 />
               </div>
 
               <div className="flex gap-3 pt-2">
                 <Button type="submit" disabled={generating}>
-                  {generating ? 'Generating...' : 'Generate & Save'}
+                  {generating ? 'Generating in Background...' : 'Generate & Save'}
                 </Button>
 
                 <Button type="button" onClick={handleReset} disabled={generating}>
@@ -537,7 +732,7 @@ const InstagramStoryIdeasPage = () => {
             {generating ? (
               <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900">
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                  Generating and saving Instagram Story ideas...
+                  Instagram Story ideas are being generated in background...
                 </p>
               </div>
             ) : !selectedRun ? (
