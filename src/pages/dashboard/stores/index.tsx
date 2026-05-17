@@ -12,19 +12,6 @@ import { toast } from 'sonner';
 
 type DiscoveryStatus = 'pending' | 'running' | 'success' | 'partial' | 'failed';
 
-type SortOrder = 'asc' | 'desc';
-
-type SortField =
-  | 'createdAt'
-  | 'updatedAt'
-  | 'checkedAt'
-  | 'name'
-  | 'domain'
-  | 'country'
-  | 'contactEmail'
-  | 'isActive'
-  | 'isChecked';
-
 type StoreContactDiscovery = {
   status?: DiscoveryStatus;
   inputDomain?: string;
@@ -64,7 +51,7 @@ type StoreContactDiscovery = {
     message?: string;
   }[];
 
-  // Legacy compatibility for old saved records.
+  // Legacy compatibility for old saved data.
   errors?: {
     url?: string;
     message?: string;
@@ -78,7 +65,7 @@ type StoreContactDiscovery = {
     pagesVisited?: number;
     errorCount?: number;
 
-    // Legacy compatibility for old saved records.
+    // Legacy compatibility for old saved data.
     errors?: number;
   };
 };
@@ -135,8 +122,8 @@ type FetchStoresOptions = {
   activeFilter?: string;
   checkedFilter?: string;
   countryFilter?: string;
-  sortBy?: SortField;
-  sortOrder?: SortOrder;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
 };
 
 const defaultFormValues: StoreFormData = {
@@ -149,18 +136,6 @@ const defaultFormValues: StoreFormData = {
   isActive: true,
   isChecked: false,
 };
-
-const sortOptions: { value: SortField; label: string }[] = [
-  { value: 'createdAt', label: 'Created' },
-  { value: 'updatedAt', label: 'Updated' },
-  { value: 'checkedAt', label: 'Checked Date' },
-  { value: 'name', label: 'Name' },
-  { value: 'domain', label: 'Domain' },
-  { value: 'country', label: 'Country' },
-  { value: 'contactEmail', label: 'Email' },
-  { value: 'isActive', label: 'Active' },
-  { value: 'isChecked', label: 'Checked' },
-];
 
 const getErrorMessage = (error: any, fallback: string) => {
   return (
@@ -224,30 +199,6 @@ const getDiscoveryCounts = (discovery?: StoreContactDiscovery | null) => {
   };
 };
 
-const getSortValue = (store: Store, field: SortField): string | number => {
-  if (field === 'createdAt') {
-    return store.createdAt ? new Date(store.createdAt).getTime() : 0;
-  }
-
-  if (field === 'updatedAt') {
-    return store.updatedAt ? new Date(store.updatedAt).getTime() : 0;
-  }
-
-  if (field === 'checkedAt') {
-    return store.checkedAt ? new Date(store.checkedAt).getTime() : 0;
-  }
-
-  if (field === 'isActive') {
-    return store.isActive ? 1 : 0;
-  }
-
-  if (field === 'isChecked') {
-    return store.isChecked ? 1 : 0;
-  }
-
-  return String(store[field] || '').toLowerCase();
-};
-
 const StoresPage = () => {
   const createModalRef = useRef<HTMLDialogElement | null>(null);
   const editModalRef = useRef<HTMLDialogElement | null>(null);
@@ -265,8 +216,8 @@ const StoresPage = () => {
   const [activeFilter, setActiveFilter] = useState('');
   const [checkedFilter, setCheckedFilter] = useState('');
   const [countryFilter, setCountryFilter] = useState('');
-  const [sortBy, setSortBy] = useState<SortField>('createdAt');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  const [sortBy, setSortBy] = useState('createdAt');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
@@ -293,25 +244,13 @@ const StoresPage = () => {
     defaultValues: defaultFormValues,
   });
 
-  const sortedStores = useMemo(() => {
-    return [...stores].sort((a, b) => {
-      const aValue = getSortValue(a, sortBy);
-      const bValue = getSortValue(b, sortBy);
-
-      if (aValue < bValue) return sortOrder === 'asc' ? -1 : 1;
-      if (aValue > bValue) return sortOrder === 'asc' ? 1 : -1;
-
-      return String(a.domain || '').localeCompare(String(b.domain || ''));
-    });
-  }, [stores, sortBy, sortOrder]);
-
   const selectedStoreIdSet = useMemo(() => {
     return new Set(selectedStoreIds);
   }, [selectedStoreIds]);
 
   const visibleStoreIds = useMemo(() => {
-    return sortedStores.map((store) => store._id);
-  }, [sortedStores]);
+    return stores.map((store) => store._id);
+  }, [stores]);
 
   const allVisibleSelected =
     visibleStoreIds.length > 0 &&
@@ -397,29 +336,6 @@ const StoresPage = () => {
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const handleSortChange = async (field: SortField) => {
-    const nextOrder: SortOrder =
-      sortBy === field && sortOrder === 'desc' ? 'asc' : 'desc';
-
-    setSortBy(field);
-    setSortOrder(nextOrder);
-    setPage(1);
-    setIsRefreshing(true);
-
-    await fetchStores({
-      page: 1,
-      limit,
-      sortBy: field,
-      sortOrder: nextOrder,
-    });
-  };
-
-  const renderSortIcon = (field: SortField) => {
-    if (sortBy !== field) return <span className="opacity-30">↕</span>;
-
-    return <span>{sortOrder === 'asc' ? '↑' : '↓'}</span>;
-  };
 
   const openCreateModal = () => {
     createForm.reset(defaultFormValues);
@@ -552,6 +468,7 @@ const StoresPage = () => {
       const nextPage = shouldGoBackOnePage ? page - 1 : page;
 
       setPage(nextPage);
+
       setSelectedStoreIds((prev) => prev.filter((id) => id !== store._id));
 
       await fetchStores({ page: nextPage, limit });
@@ -563,6 +480,8 @@ const StoresPage = () => {
   };
 
   const handleDeleteStore = (store: Store) => {
+    toast.dismiss();
+
     toast(`Delete "${store.name}"?`, {
       description: 'This action cannot be undone.',
       action: {
@@ -641,7 +560,18 @@ const StoresPage = () => {
     }
   };
 
-  const performBulkDiscoverSelectedStores = async () => {
+  const handleBulkDiscoverSelectedStores = async () => {
+    if (!selectedStoreIds.length) {
+      toast.error('Select at least one store first.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Start contact discovery for ${selectedStoreIds.length} selected stores?`
+    );
+
+    if (!confirmed) return;
+
     const toastId = toast.loading(
       `Checking ${selectedStoreIds.length} selected stores...`
     );
@@ -711,35 +641,11 @@ const StoresPage = () => {
     }
   };
 
-  const handleBulkDiscoverSelectedStores = async () => {
-    if (!selectedStoreIds.length) {
-      toast.error('Select at least one store first.');
-      return;
-    }
-
-    toast(`Start contact discovery for ${selectedStoreIds.length} stores?`, {
-      description:
-        'Selected stores will be crawled and updated with discovered contact data.',
-      action: {
-        label: 'Start',
-        onClick: () => {
-          performBulkDiscoverSelectedStores();
-        },
-      },
-      cancel: {
-        label: 'Cancel',
-        onClick: () => {},
-      },
-      duration: 10000,
-    });
-  };
-
   const handleApplyFilters = async (e: FormEvent) => {
     e.preventDefault();
 
     setPage(1);
     setIsRefreshing(true);
-    setSelectedStoreIds([]);
 
     await fetchStores({ page: 1, limit });
   };
@@ -770,7 +676,6 @@ const StoresPage = () => {
   const handlePageChange = async (nextPage: number) => {
     setPage(nextPage);
     setIsRefreshing(true);
-    setSelectedStoreIds([]);
 
     await fetchStores({ page: nextPage, limit });
   };
@@ -779,7 +684,6 @@ const StoresPage = () => {
     setLimit(nextLimit);
     setPage(1);
     setIsRefreshing(true);
-    setSelectedStoreIds([]);
 
     await fetchStores({
       page: 1,
@@ -787,7 +691,7 @@ const StoresPage = () => {
     });
   };
 
-  const performImportFromJson = async () => {
+  const handleImportFromJson = async () => {
     if (!jsonFile) {
       toast.error('Please select a JSON file first.');
       return;
@@ -797,6 +701,12 @@ const StoresPage = () => {
       toast.error('Only .json files are allowed.');
       return;
     }
+
+    const confirmed = window.confirm(
+      'This will add new stores from the uploaded JSON file. Existing stores will not be removed. Duplicate domains will be skipped. Continue?'
+    );
+
+    if (!confirmed) return;
 
     try {
       setIsImporting(true);
@@ -841,38 +751,10 @@ const StoresPage = () => {
     }
   };
 
-  const handleImportFromJson = async () => {
-    if (!jsonFile) {
-      toast.error('Please select a JSON file first.');
-      return;
-    }
-
-    if (!jsonFile.name.toLowerCase().endsWith('.json')) {
-      toast.error('Only .json files are allowed.');
-      return;
-    }
-
-    toast('Import stores from JSON?', {
-      description:
-        'Existing stores will not be removed. Duplicate domains will be skipped.',
-      action: {
-        label: 'Import',
-        onClick: () => {
-          performImportFromJson();
-        },
-      },
-      cancel: {
-        label: 'Cancel',
-        onClick: () => {},
-      },
-      duration: 10000,
-    });
-  };
-
   return (
     <DashboardLayout>
       <div className="min-h-screen bg-base-200/40 py-8" dir="ltr">
-        <div className="mx-auto max-w-[1700px] space-y-6 px-4 md:px-6">
+        <div className="mx-auto max-w-[1600px] space-y-6 px-4 md:px-6">
           <div className="rounded-3xl border border-base-300 bg-base-100 shadow-sm">
             <div className="border-b border-base-300 p-5 md:p-7">
               <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
@@ -884,11 +766,6 @@ const StoresPage = () => {
 
                     <span className="badge badge-primary badge-outline">
                       Shopify
-                    </span>
-
-                    <span className="badge badge-ghost">
-                      Sorted by {sortOptions.find((item) => item.value === sortBy)?.label}{' '}
-                      {sortOrder === 'asc' ? '↑' : '↓'}
                     </span>
                   </div>
 
@@ -974,244 +851,88 @@ const StoresPage = () => {
             </div>
 
             <div className="space-y-6 p-5 md:p-7">
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_420px]">
-                <div className="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
-                  <form
-                    onSubmit={handleApplyFilters}
-                    className="grid grid-cols-1 gap-4 lg:grid-cols-12"
-                  >
-                    <div className="form-control lg:col-span-4">
-                      <label className="label" htmlFor="store-search">
-                        <span className="label-text">Search</span>
-                      </label>
+              <div className="rounded-3xl border border-info/20 bg-info/5 p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-base-content">
+                      Import Stores from JSON
+                    </h2>
 
-                      <input
-                        id="store-search"
-                        type="text"
-                        title="Search stores by name, domain, country, or email"
-                        className="input input-bordered w-full bg-base-100"
-                        value={search}
-                        placeholder="Search name, domain, country, email"
-                        dir="ltr"
-                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                          setSearch(e.target.value)
-                        }
-                      />
-                    </div>
-
-                    <div className="form-control lg:col-span-2">
-                      <label className="label" htmlFor="active-filter">
-                        <span className="label-text">Active Status</span>
-                      </label>
-
-                      <select
-                        id="active-filter"
-                        title="Filter stores by active status"
-                        className="select select-bordered bg-base-100"
-                        value={activeFilter}
-                        onChange={(e) => setActiveFilter(e.target.value)}
-                      >
-                        <option value="">All</option>
-                        <option value="true">Active</option>
-                        <option value="false">Inactive</option>
-                      </select>
-                    </div>
-
-                    <div className="form-control lg:col-span-2">
-                      <label className="label" htmlFor="checked-filter">
-                        <span className="label-text">Review Status</span>
-                      </label>
-
-                      <select
-                        id="checked-filter"
-                        title="Filter stores by checked or reviewed status"
-                        className="select select-bordered bg-base-100"
-                        value={checkedFilter}
-                        onChange={(e) => setCheckedFilter(e.target.value)}
-                      >
-                        <option value="">All</option>
-                        <option value="true">Checked</option>
-                        <option value="false">Not checked</option>
-                      </select>
-                    </div>
-
-                    <div className="form-control lg:col-span-2">
-                      <label className="label" htmlFor="country-filter">
-                        <span className="label-text">Country</span>
-                      </label>
-
-                      <input
-                        id="country-filter"
-                        type="text"
-                        title="Filter stores by country"
-                        className="input input-bordered w-full bg-base-100"
-                        value={countryFilter}
-                        placeholder="Canada"
-                        dir="ltr"
-                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                          setCountryFilter(e.target.value)
-                        }
-                      />
-                    </div>
-
-                    <div className="form-control lg:col-span-1">
-                      <label className="label" htmlFor="sort-by">
-                        <span className="label-text">Sort Field</span>
-                      </label>
-
-                      <select
-                        id="sort-by"
-                        title="Select the field used for sorting"
-                        className="select select-bordered bg-base-100"
-                        value={sortBy}
-                        onChange={(e) =>
-                          handleSortChange(e.target.value as SortField)
-                        }
-                      >
-                        {sortOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="form-control lg:col-span-1">
-                      <label className="label" htmlFor="sort-order">
-                        <span className="label-text">Order</span>
-                      </label>
-
-                      <select
-                        id="sort-order"
-                        title="Select ascending or descending sort order"
-                        className="select select-bordered bg-base-100"
-                        value={sortOrder}
-                        onChange={(e) => {
-                          const nextOrder = e.target.value as SortOrder;
-
-                          setSortOrder(nextOrder);
-                          setPage(1);
-                          setIsRefreshing(true);
-
-                          fetchStores({
-                            page: 1,
-                            limit,
-                            sortBy,
-                            sortOrder: nextOrder,
-                          });
-                        }}
-                      >
-                        <option value="desc">Desc</option>
-                        <option value="asc">Asc</option>
-                      </select>
-                    </div>
-
-                    <div className="flex flex-wrap items-end gap-2 lg:col-span-12">
-                      <button
-                        type="submit"
-                        title="Apply store filters"
-                        className={`btn btn-primary ${
-                          isRefreshing ? 'btn-disabled' : ''
-                        }`}
-                      >
-                        {isRefreshing ? (
-                          <>
-                            <span className="loading loading-spinner loading-sm" />
-                            Filtering
-                          </>
-                        ) : (
-                          'Apply Filters'
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        title="Reset all filters"
-                        className="btn btn-ghost"
-                        onClick={handleResetFilters}
-                      >
-                        Reset
-                      </button>
-                    </div>
-                  </form>
-                </div>
-
-                <div className="rounded-3xl border border-info/20 bg-info/5 p-5 shadow-sm">
-                  <div className="flex flex-col gap-4">
-                    <div>
-                      <h2 className="text-lg font-semibold text-base-content">
-                        Import Stores
-                      </h2>
-
-                      <p className="mt-1 text-sm text-base-content/70">
-                        Upload a JSON array. Existing domains are skipped.
-                      </p>
-                    </div>
-
-                    <div className="form-control">
-                      <label className="label" htmlFor="stores-json-file">
-                        <span className="label-text">JSON File</span>
-                      </label>
-
-                      <input
-                        id="stores-json-file"
-                        ref={fileInputRef}
-                        type="file"
-                        title="Select stores JSON file"
-                        accept="application/json,.json"
-                        className="file-input file-input-bordered w-full bg-base-100"
-                        disabled={isImporting}
-                        onChange={(e) => {
-                          setJsonFile(e.target.files?.[0] || null);
-                          setImportResult(null);
-                          setUploadProgress(null);
-                        }}
-                      />
-                    </div>
-
-                    <button
-                      type="button"
-                      title="Import stores from selected JSON file"
-                      className={`btn btn-info ${
-                        isImporting ? 'btn-disabled' : ''
-                      }`}
-                      onClick={handleImportFromJson}
-                    >
-                      {isImporting ? (
-                        <>
-                          <span className="loading loading-spinner loading-sm" />
-                          Importing
-                        </>
-                      ) : (
-                        'Import JSON'
-                      )}
-                    </button>
-
-                    {jsonFile && (
-                      <div className="text-sm text-base-content/70">
-                        Selected:{' '}
-                        <span className="font-medium text-base-content">
-                          {jsonFile.name}
-                        </span>
-                      </div>
-                    )}
-
-                    {uploadProgress !== null && (
-                      <div>
-                        <div className="mb-1 flex justify-between text-xs text-base-content/70">
-                          <span>Uploading</span>
-                          <span>{uploadProgress}%</span>
-                        </div>
-
-                        <progress
-                          className="progress progress-info w-full"
-                          value={uploadProgress}
-                          max={100}
-                        />
-                      </div>
-                    )}
+                    <p className="mt-1 text-sm text-base-content/70">
+                      Upload a JSON array. Existing domains are skipped and only
+                      new stores are inserted.
+                    </p>
                   </div>
+
+                  <span className="badge badge-info badge-outline">
+                    safe import
+                  </span>
                 </div>
+
+                <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-end">
+                  <div className="form-control flex-1">
+                    <label className="label" htmlFor="stores-json-file">
+                      <span className="label-text">JSON File</span>
+                    </label>
+
+                    <input
+                      id="stores-json-file"
+                      ref={fileInputRef}
+                      type="file"
+                      title="Select stores JSON file"
+                      accept="application/json,.json"
+                      className="file-input file-input-bordered w-full bg-base-100"
+                      disabled={isImporting}
+                      onChange={(e) => {
+                        setJsonFile(e.target.files?.[0] || null);
+                        setImportResult(null);
+                        setUploadProgress(null);
+                      }}
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    title="Import stores from selected JSON file"
+                    className={`btn btn-info min-w-[150px] ${
+                      isImporting ? 'btn-disabled' : ''
+                    }`}
+                    onClick={handleImportFromJson}
+                  >
+                    {isImporting ? (
+                      <>
+                        <span className="loading loading-spinner loading-sm" />
+                        Importing
+                      </>
+                    ) : (
+                      'Import'
+                    )}
+                  </button>
+                </div>
+
+                {jsonFile && (
+                  <div className="mt-3 text-sm text-base-content/70">
+                    Selected:{' '}
+                    <span className="font-medium text-base-content">
+                      {jsonFile.name}
+                    </span>
+                  </div>
+                )}
+
+                {uploadProgress !== null && (
+                  <div className="mt-4">
+                    <div className="mb-1 flex justify-between text-xs text-base-content/70">
+                      <span>Uploading</span>
+                      <span>{uploadProgress}%</span>
+                    </div>
+
+                    <progress
+                      className="progress progress-info w-full"
+                      value={uploadProgress}
+                      max={100}
+                    />
+                  </div>
+                )}
               </div>
 
               {importResult && (
@@ -1307,7 +1028,156 @@ const StoresPage = () => {
                 </div>
               )}
 
-              <div className="rounded-3xl border border-base-300 bg-base-100 p-4 shadow-sm">
+              <div className="rounded-3xl border border-base-300 bg-base-100 p-5">
+                <form
+                  onSubmit={handleApplyFilters}
+                  className="grid grid-cols-1 gap-4 lg:grid-cols-12"
+                >
+                  <div className="form-control lg:col-span-4">
+                    <label className="label" htmlFor="store-search">
+                      <span className="label-text">Search</span>
+                    </label>
+
+                    <input
+                      id="store-search"
+                      type="text"
+                      title="Search stores by name, domain, country, or email"
+                      className="input input-bordered w-full bg-base-100"
+                      value={search}
+                      placeholder="Search name, domain, country, email"
+                      dir="ltr"
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setSearch(e.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="form-control lg:col-span-2">
+                    <label className="label" htmlFor="active-filter">
+                      <span className="label-text">Active Status</span>
+                    </label>
+
+                    <select
+                      id="active-filter"
+                      title="Filter stores by active status"
+                      className="select select-bordered bg-base-100"
+                      value={activeFilter}
+                      onChange={(e) => setActiveFilter(e.target.value)}
+                    >
+                      <option value="">All</option>
+                      <option value="true">Active</option>
+                      <option value="false">Inactive</option>
+                    </select>
+                  </div>
+
+                  <div className="form-control lg:col-span-2">
+                    <label className="label" htmlFor="checked-filter">
+                      <span className="label-text">Review Status</span>
+                    </label>
+
+                    <select
+                      id="checked-filter"
+                      title="Filter stores by checked or reviewed status"
+                      className="select select-bordered bg-base-100"
+                      value={checkedFilter}
+                      onChange={(e) => setCheckedFilter(e.target.value)}
+                    >
+                      <option value="">All</option>
+                      <option value="true">Checked</option>
+                      <option value="false">Not checked</option>
+                    </select>
+                  </div>
+
+                  <div className="form-control lg:col-span-2">
+                    <label className="label" htmlFor="country-filter">
+                      <span className="label-text">Country</span>
+                    </label>
+
+                    <input
+                      id="country-filter"
+                      type="text"
+                      title="Filter stores by country"
+                      className="input input-bordered w-full bg-base-100"
+                      value={countryFilter}
+                      placeholder="Canada"
+                      dir="ltr"
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setCountryFilter(e.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div className="form-control lg:col-span-1">
+                    <label className="label" htmlFor="sort-by">
+                      <span className="label-text">Sort Field</span>
+                    </label>
+
+                    <select
+                      id="sort-by"
+                      title="Select the field used for sorting"
+                      className="select select-bordered bg-base-100"
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value)}
+                    >
+                      <option value="createdAt">Created</option>
+                      <option value="updatedAt">Updated</option>
+                      <option value="checkedAt">Checked</option>
+                      <option value="name">Name</option>
+                      <option value="domain">Domain</option>
+                      <option value="country">Country</option>
+                    </select>
+                  </div>
+
+                  <div className="form-control lg:col-span-1">
+                    <label className="label" htmlFor="sort-order">
+                      <span className="label-text">Sort Order</span>
+                    </label>
+
+                    <select
+                      id="sort-order"
+                      title="Select ascending or descending sort order"
+                      className="select select-bordered bg-base-100"
+                      value={sortOrder}
+                      onChange={(e) =>
+                        setSortOrder(e.target.value as 'asc' | 'desc')
+                      }
+                    >
+                      <option value="desc">Desc</option>
+                      <option value="asc">Asc</option>
+                    </select>
+                  </div>
+
+                  <div className="flex flex-wrap items-end gap-2 lg:col-span-12">
+                    <button
+                      type="submit"
+                      title="Apply store filters"
+                      className={`btn btn-primary ${
+                        isRefreshing ? 'btn-disabled' : ''
+                      }`}
+                    >
+                      {isRefreshing ? (
+                        <>
+                          <span className="loading loading-spinner loading-sm" />
+                          Filtering
+                        </>
+                      ) : (
+                        'Apply Filters'
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      title="Reset all filters"
+                      className="btn btn-ghost"
+                      onClick={handleResetFilters}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <div className="rounded-3xl border border-base-300 bg-base-100 p-4">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div>
                     <div className="font-semibold text-base-content">
@@ -1325,7 +1195,7 @@ const StoresPage = () => {
                       title="Select or unselect all visible stores"
                       className="btn btn-outline btn-sm"
                       onClick={toggleSelectVisibleStores}
-                      disabled={isBulkChecking || sortedStores.length === 0}
+                      disabled={isBulkChecking || stores.length === 0}
                     >
                       {allVisibleSelected ? 'Unselect Visible' : 'Select Visible'}
                     </button>
@@ -1387,13 +1257,12 @@ const StoresPage = () => {
                 </div>
               )}
 
-              <div className="rounded-3xl border border-base-300 bg-base-100 shadow-sm">
+              <div className="rounded-3xl border border-base-300 bg-base-100">
                 <div className="flex flex-col gap-3 border-b border-base-300 p-5 md:flex-row md:items-center md:justify-between">
                   <div>
                     <h2 className="text-lg font-semibold">Store List</h2>
                     <p className="mt-1 text-sm text-base-content/60">
-                      Click table headers to sort. Select rows, then start a
-                      batch contact check.
+                      Select rows, then start a batch contact check.
                     </p>
                   </div>
 
@@ -1414,7 +1283,7 @@ const StoresPage = () => {
                   <div className="flex items-center justify-center py-20">
                     <span className="loading loading-spinner loading-lg" />
                   </div>
-                ) : sortedStores.length === 0 ? (
+                ) : stores.length === 0 ? (
                   <div className="px-6 py-16 text-center">
                     <div className="mx-auto max-w-md">
                       <div className="text-4xl">🗂️</div>
@@ -1428,8 +1297,8 @@ const StoresPage = () => {
                   </div>
                 ) : (
                   <>
-                    <div className="max-h-[720px] overflow-auto">
-                      <table className="table table-zebra table-pin-rows min-w-[1540px]">
+                    <div className="max-h-[680px] overflow-auto">
+                      <table className="table table-zebra table-pin-rows min-w-[1480px]">
                         <thead>
                           <tr className="bg-base-200">
                             <th className="w-[170px]">
@@ -1439,83 +1308,25 @@ const StoresPage = () => {
                                   title="Select all visible stores"
                                   className="checkbox checkbox-primary checkbox-sm"
                                   checked={allVisibleSelected}
-                                  disabled={
-                                    isBulkChecking || sortedStores.length === 0
-                                  }
+                                  disabled={isBulkChecking || stores.length === 0}
                                   onChange={toggleSelectVisibleStores}
                                 />
                                 <span>Select</span>
                               </label>
                             </th>
-
-                            <th className="w-[240px]">
-                              <button
-                                type="button"
-                                className="flex items-center gap-2 font-semibold"
-                                onClick={() => handleSortChange('name')}
-                              >
-                                Store {renderSortIcon('name')}
-                              </button>
-                            </th>
-
-                            <th className="w-[240px]">
-                              <button
-                                type="button"
-                                className="flex items-center gap-2 font-semibold"
-                                onClick={() => handleSortChange('domain')}
-                              >
-                                Domain {renderSortIcon('domain')}
-                              </button>
-                            </th>
-
-                            <th className="w-[120px]">
-                              <button
-                                type="button"
-                                className="flex items-center gap-2 font-semibold"
-                                onClick={() => handleSortChange('country')}
-                              >
-                                Country {renderSortIcon('country')}
-                              </button>
-                            </th>
-
-                            <th className="w-[210px]">
-                              <button
-                                type="button"
-                                className="flex items-center gap-2 font-semibold"
-                                onClick={() => handleSortChange('contactEmail')}
-                              >
-                                Contact {renderSortIcon('contactEmail')}
-                              </button>
-                            </th>
-
+                            <th className="w-[240px]">Store</th>
+                            <th className="w-[240px]">Domain</th>
+                            <th className="w-[120px]">Country</th>
+                            <th className="w-[190px]">Contact</th>
                             <th className="w-[250px]">Reach Channels</th>
-
-                            <th className="w-[130px]">
-                              <button
-                                type="button"
-                                className="flex items-center gap-2 font-semibold"
-                                onClick={() => handleSortChange('isActive')}
-                              >
-                                Status {renderSortIcon('isActive')}
-                              </button>
-                            </th>
-
-                            <th className="w-[170px]">
-                              <button
-                                type="button"
-                                className="flex items-center gap-2 font-semibold"
-                                onClick={() => handleSortChange('isChecked')}
-                              >
-                                Review {renderSortIcon('isChecked')}
-                              </button>
-                            </th>
-
+                            <th className="w-[130px]">Status</th>
+                            <th className="w-[170px]">Discovery</th>
                             <th className="w-[470px] text-right">Actions</th>
                           </tr>
                         </thead>
 
                         <tbody>
-                          {sortedStores.map((store) => {
+                          {stores.map((store) => {
                             const discovery =
                               store.metadata?.contactDiscovery || null;
                             const counts = getDiscoveryCounts(discovery);
@@ -1593,7 +1404,7 @@ const StoresPage = () => {
                                     {store.contactEmail ? (
                                       <a
                                         href={`mailto:${store.contactEmail}`}
-                                        className="link-hover link break-all text-sm"
+                                        className="link-hover link text-sm"
                                       >
                                         {store.contactEmail}
                                       </a>
@@ -1681,10 +1492,6 @@ const StoresPage = () => {
                                         </div>
                                       )}
                                     </div>
-                                  ) : store.isChecked ? (
-                                    <span className="badge badge-info badge-outline">
-                                      checked
-                                    </span>
                                   ) : (
                                     <span className="badge badge-ghost">
                                       none
@@ -1790,14 +1597,12 @@ const StoresPage = () => {
                       </table>
                     </div>
 
-                    <div className="border-t border-base-300">
-                      <Pagination
-                        pagination={pagination}
-                        isLoading={isRefreshing || isListLoading}
-                        onPageChange={handlePageChange}
-                        onLimitChange={handleLimitChange}
-                      />
-                    </div>
+                    <Pagination
+                      pagination={pagination}
+                      isLoading={isRefreshing || isListLoading}
+                      onPageChange={handlePageChange}
+                      onLimitChange={handleLimitChange}
+                    />
                   </>
                 )}
               </div>
@@ -1805,7 +1610,6 @@ const StoresPage = () => {
           </div>
         </div>
 
-        {/* Create Modal */}
         <dialog ref={createModalRef} className="modal">
           <div className="modal-box max-w-3xl rounded-3xl">
             <div className="mb-6 flex items-start justify-between gap-4">
@@ -2035,7 +1839,6 @@ const StoresPage = () => {
           </form>
         </dialog>
 
-        {/* Edit Modal */}
         <dialog ref={editModalRef} className="modal">
           <div className="modal-box max-w-3xl rounded-3xl">
             <div className="mb-6 flex items-start justify-between gap-4">
@@ -2265,7 +2068,6 @@ const StoresPage = () => {
           </form>
         </dialog>
 
-        {/* Details Modal */}
         <dialog ref={detailsModalRef} className="modal">
           <div className="modal-box max-h-[90vh] max-w-6xl overflow-hidden rounded-3xl p-0">
             <div className="sticky top-0 z-10 border-b border-base-300 bg-base-100 p-5 md:p-6">
@@ -2469,7 +2271,276 @@ const StoresPage = () => {
                         </div>
                       </div>
                     </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                      <div>
+                        <div className="text-xs text-base-content/50">
+                          Primary Email
+                        </div>
+                        <div className="mt-1 break-all font-medium">
+                          {detailsDiscovery?.primaryEmail || '-'}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="text-xs text-base-content/50">
+                          Started
+                        </div>
+                        <div className="mt-1 font-medium">
+                          {formatDateTime(detailsDiscovery?.startedAt)}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="text-xs text-base-content/50">
+                          Finished
+                        </div>
+                        <div className="mt-1 font-medium">
+                          {formatDateTime(detailsDiscovery?.finishedAt)}
+                        </div>
+                      </div>
+                    </div>
                   </div>
+
+                  <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                    <div className="rounded-2xl border border-base-300 bg-base-100">
+                      <div className="border-b border-base-300 p-4">
+                        <h4 className="font-semibold">Emails</h4>
+                      </div>
+
+                      <div className="max-h-[260px] overflow-auto p-4">
+                        {detailsDiscovery?.emails?.length ? (
+                          <div className="space-y-3">
+                            {detailsDiscovery.emails.map((email, index) => (
+                              <div
+                                key={`${email.value}-${index}`}
+                                className="rounded-xl bg-base-200/60 p-3"
+                              >
+                                <a
+                                  href={`mailto:${email.value}`}
+                                  className="link-hover link break-all font-medium"
+                                >
+                                  {email.value}
+                                </a>
+
+                                <div className="mt-1 text-xs text-base-content/60">
+                                  {email.kind || 'email'} ·{' '}
+                                  {email.sourceUrl || '-'}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-sm text-base-content/50">
+                            No emails found.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-base-300 bg-base-100">
+                      <div className="border-b border-base-300 p-4">
+                        <h4 className="font-semibold">Social Profiles</h4>
+                      </div>
+
+                      <div className="max-h-[260px] overflow-auto p-4">
+                        {detailsDiscovery?.socialProfiles?.length ? (
+                          <div className="space-y-3">
+                            {detailsDiscovery.socialProfiles.map(
+                              (profile, index) => (
+                                <div
+                                  key={`${profile.platform}-${profile.url}-${index}`}
+                                  className="rounded-xl bg-base-200/60 p-3"
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="badge badge-info badge-outline">
+                                      {profile.platform}
+                                    </span>
+
+                                    <a
+                                      href={profile.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="link-hover link break-all text-sm"
+                                    >
+                                      {profile.url}
+                                    </a>
+                                  </div>
+
+                                  <div className="mt-1 text-xs text-base-content/60">
+                                    Source: {profile.sourceUrl || '-'}
+                                  </div>
+                                </div>
+                              )
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-sm text-base-content/50">
+                            No social profiles found.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-base-300 bg-base-100">
+                      <div className="border-b border-base-300 p-4">
+                        <h4 className="font-semibold">Phones</h4>
+                      </div>
+
+                      <div className="max-h-[220px] overflow-auto p-4">
+                        {detailsDiscovery?.phones?.length ? (
+                          <div className="space-y-3">
+                            {detailsDiscovery.phones.map((phone, index) => (
+                              <div
+                                key={`${phone.value}-${index}`}
+                                className="rounded-xl bg-base-200/60 p-3"
+                              >
+                                <div className="font-medium">
+                                  {phone.value}
+                                </div>
+
+                                <div className="mt-1 text-xs text-base-content/60">
+                                  {phone.sourceUrl || '-'}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-sm text-base-content/50">
+                            No phones found.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-base-300 bg-base-100">
+                      <div className="border-b border-base-300 p-4">
+                        <h4 className="font-semibold">Contact Forms</h4>
+                      </div>
+
+                      <div className="max-h-[220px] overflow-auto p-4">
+                        {detailsDiscovery?.contactForms?.length ? (
+                          <div className="space-y-3">
+                            {detailsDiscovery.contactForms.map(
+                              (form, index) => (
+                                <div
+                                  key={`${form.action}-${index}`}
+                                  className="rounded-xl bg-base-200/60 p-3"
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="badge badge-success badge-outline">
+                                      {form.method || 'GET'}
+                                    </span>
+
+                                    <a
+                                      href={form.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="link-hover link break-all text-sm"
+                                    >
+                                      {form.url}
+                                    </a>
+                                  </div>
+
+                                  <div className="mt-1 break-all text-xs text-base-content/60">
+                                    Action: {form.action || '-'}
+                                  </div>
+                                </div>
+                              )
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-sm text-base-content/50">
+                            No contact forms found.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-base-300 bg-base-100">
+                    <div className="border-b border-base-300 p-4">
+                      <h4 className="font-semibold">Crawled Pages</h4>
+                    </div>
+
+                    <div className="max-h-[300px] overflow-auto">
+                      {detailsDiscovery?.pages?.length ? (
+                        <table className="table table-sm table-pin-rows min-w-[900px]">
+                          <thead>
+                            <tr>
+                              <th>OK</th>
+                              <th>Status</th>
+                              <th>URL</th>
+                              <th>Reason</th>
+                            </tr>
+                          </thead>
+
+                          <tbody>
+                            {detailsDiscovery.pages.map((pageItem, index) => (
+                              <tr key={`${pageItem.url}-${index}`}>
+                                <td>
+                                  {pageItem.ok ? (
+                                    <span className="badge badge-success badge-outline">
+                                      yes
+                                    </span>
+                                  ) : (
+                                    <span className="badge badge-error badge-outline">
+                                      no
+                                    </span>
+                                  )}
+                                </td>
+                                <td>{pageItem.status ?? '-'}</td>
+                                <td>
+                                  <a
+                                    href={pageItem.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="link-hover link break-all"
+                                  >
+                                    {pageItem.url}
+                                  </a>
+                                </td>
+                                <td>{pageItem.reason || '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div className="p-4 text-sm text-base-content/50">
+                          No crawled pages stored.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {detailsErrors.length > 0 && (
+                    <div className="rounded-2xl border border-error/20 bg-error/5">
+                      <div className="border-b border-error/20 p-4">
+                        <h4 className="font-semibold text-error">
+                          Crawl Errors
+                        </h4>
+                      </div>
+
+                      <div className="max-h-[260px] overflow-auto p-4">
+                        <div className="space-y-3">
+                          {detailsErrors.map((errorItem, index) => (
+                            <div
+                              key={`${errorItem.url}-${index}`}
+                              className="rounded-xl bg-base-100 p-3"
+                            >
+                              <div className="break-all text-sm font-medium">
+                                {errorItem.url || '-'}
+                              </div>
+
+                              <div className="mt-1 text-sm text-error">
+                                {errorItem.message || '-'}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {detailsStore.notes && (
                     <div className="rounded-2xl border border-base-300 bg-base-100 p-5">
