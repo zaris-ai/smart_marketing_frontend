@@ -1,12 +1,13 @@
 import { DashboardLayout } from '@/components/layouts';
 import { Button, Input } from '@/components/ui';
 import api from '@/lib/axios';
+import { withAuth } from '@/utils';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
+import { saveAs } from 'file-saver';
 import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import ReactMarkdown from 'react-markdown';
-import { saveAs } from 'file-saver';
-import { Document, Packer, Paragraph, TextRun } from 'docx';
-import { withAuth } from '@/utils';
+import { toast } from 'sonner';
 
 type ResearchCrewFormData = {
   topic: string;
@@ -41,15 +42,33 @@ type ResearchViewResult = {
   raw_result: any;
 };
 
-type BackgroundRun = {
+type ResearchRecord = {
   _id: string;
+  runId?: string;
   crewName: string;
   title?: string;
+  topic: string;
+  audience?: string;
+  market?: string;
+  business_context?: string;
+  goal?: string;
+  product_context?: string;
+  country?: string;
+  locale?: string;
+  max_sources?: number;
   status: 'queued' | 'running' | 'success' | 'failed';
+  approved?: boolean;
+  reportTitle?: string;
+  reportMarkdown?: string;
+  sources?: ResearchSource[];
+  reviewerNotes?: string;
+  tasksOutput?: string[];
+  rawContent?: string;
   result?: any;
   error?: {
     message?: string;
     stack?: string;
+    name?: string;
   };
   createdAt?: string;
   startedAt?: string | null;
@@ -79,8 +98,7 @@ const exampleScenarios = [
       topic: 'Notion vs ClickUp positioning',
       audience: 'Product Marketing Manager',
       market: 'Global SaaS productivity tools',
-      business_context:
-        'We are building a productivity SaaS tool',
+      business_context: 'We are building a productivity SaaS tool',
       goal: 'Identify positioning gaps and messaging opportunities',
       product_context: 'Task management + collaboration platform',
     },
@@ -155,8 +173,36 @@ function parseResearchRunResult(rawRunResult: any): ResearchViewResult {
       ? parsedContent.sources
       : [],
     reviewer_notes: parsedContent?.reviewer_notes || '',
-    tasks_output: tasksOutput,
+    tasks_output: tasksOutput.map((item: any) =>
+      typeof item === 'string' ? item : JSON.stringify(item, null, 2)
+    ),
     raw_result: rawResult,
+  };
+}
+
+function parseResearchRecord(record: ResearchRecord): ResearchViewResult {
+  const fallback = parseResearchRunResult(record?.result);
+
+  return {
+    approved: Boolean(record?.approved || fallback.approved),
+    title:
+      record?.reportTitle ||
+      fallback.title ||
+      record?.title ||
+      record?.topic ||
+      'Research Report',
+    report_markdown: record?.reportMarkdown || fallback.report_markdown || '',
+    sources:
+      Array.isArray(record?.sources) && record.sources.length > 0
+        ? record.sources
+        : fallback.sources,
+    reviewer_notes:
+      record?.reviewerNotes || fallback.reviewer_notes || '',
+    tasks_output:
+      Array.isArray(record?.tasksOutput) && record.tasksOutput.length > 0
+        ? record.tasksOutput
+        : fallback.tasks_output,
+    raw_result: record?.result || record,
   };
 }
 
@@ -251,14 +297,38 @@ const markdownToDocxParagraphs = (markdown: string) => {
   return paragraphs;
 };
 
+function formatDate(value?: string | null) {
+  if (!value) return '-';
+
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
+  }
+}
+
+function getStatusClass(status: ResearchRecord['status']) {
+  if (status === 'success') return 'badge-success';
+  if (status === 'failed') return 'badge-error';
+  if (status === 'running') return 'badge-info';
+
+  return 'badge-warning';
+}
+
 const ResearchPage = () => {
   const [serverError, setServerError] = useState('');
   const [result, setResult] = useState<ResearchViewResult | null>(null);
+  const [selectedRecord, setSelectedRecord] = useState<ResearchRecord | null>(
+    null
+  );
+  const [researchRuns, setResearchRuns] = useState<ResearchRecord[]>([]);
   const [isExampleModalOpen, setIsExampleModalOpen] = useState(false);
 
+  const [activeResearchId, setActiveResearchId] = useState('');
   const [runId, setRunId] = useState('');
   const [runStatus, setRunStatus] = useState('');
   const [isBackgroundRunning, setIsBackgroundRunning] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const {
     register,
@@ -279,7 +349,7 @@ const ResearchPage = () => {
   const isBusy = isSubmitting || isBackgroundRunning;
 
   const runStatusLabel = useMemo(() => {
-    if (!runId) return '';
+    if (!activeResearchId && !runId) return '';
 
     if (runStatus === 'queued') return 'Queued';
     if (runStatus === 'running') return 'Running';
@@ -287,38 +357,57 @@ const ResearchPage = () => {
     if (runStatus === 'failed') return 'Failed';
 
     return runStatus || 'Queued';
-  }, [runId, runStatus]);
+  }, [activeResearchId, runId, runStatus]);
 
-  const handleExampleClick = (example: any) => {
-    Object.entries(example.data).forEach(([key, value]) => {
-      setValue(key as keyof ResearchCrewFormData, value as string);
-    });
+  const fetchResearchRuns = async () => {
+    try {
+      setIsLoadingHistory(true);
 
-    setIsExampleModalOpen(false);
-    setResult(null);
-    setServerError('');
-    setRunId('');
-    setRunStatus('');
-    setIsBackgroundRunning(false);
+      const response = await api.get('/research', {
+        params: {
+          limit: 20,
+        },
+      });
+
+      const items = response?.data?.data?.items || [];
+      setResearchRuns(items);
+    } catch (error: any) {
+      toast.error(getErrorMessage(error, 'Failed to load research history.'));
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  const fetchResearchById = async (id: string) => {
+    const response = await api.get(`/research/${id}`);
+    return response?.data?.data as ResearchRecord;
   };
 
   useEffect(() => {
-    if (!runId) return;
+    fetchResearchRuns();
+  }, []);
+
+  useEffect(() => {
+    if (!activeResearchId) return;
 
     const timer = setInterval(async () => {
       try {
-        const response = await api.get(`/background-runs/${runId}`);
-        const run: BackgroundRun | undefined = response?.data?.data;
+        const record = await fetchResearchById(activeResearchId);
 
-        if (!run) return;
+        if (!record) return;
 
-        setRunStatus(run.status || '');
+        setSelectedRecord(record);
+        setRunStatus(record.status || '');
 
-        if (run.status === 'success') {
+        setResearchRuns((prev) =>
+          prev.map((item) => (item._id === record._id ? record : item))
+        );
+
+        if (record.status === 'success') {
           clearInterval(timer);
           setIsBackgroundRunning(false);
 
-          const parsedResult = parseResearchRunResult(run.result);
+          const parsedResult = parseResearchRecord(record);
 
           if (!parsedResult.report_markdown) {
             throw new Error(
@@ -327,22 +416,29 @@ const ResearchPage = () => {
           }
 
           setResult(parsedResult);
-
+          setActiveResearchId('');
           setRunId('');
           setRunStatus('');
+
+          toast.success('Research completed.');
+          fetchResearchRuns();
 
           return;
         }
 
-        if (run.status === 'failed') {
+        if (record.status === 'failed') {
           clearInterval(timer);
           setIsBackgroundRunning(false);
 
-          const message = run?.error?.message || 'Research background task failed.';
+          const message =
+            record?.error?.message || 'Research background task failed.';
 
           setServerError(message);
+          setActiveResearchId('');
           setRunId('');
           setRunStatus('');
+
+          toast.error(message);
 
           return;
         }
@@ -356,18 +452,104 @@ const ResearchPage = () => {
         );
 
         setServerError(message);
+        setActiveResearchId('');
         setRunId('');
         setRunStatus('');
+        toast.error(message);
       }
     }, 4000);
 
     return () => clearInterval(timer);
-  }, [runId]);
+  }, [activeResearchId]);
+
+  const handleExampleClick = (example: any) => {
+    Object.entries(example.data).forEach(([key, value]) => {
+      setValue(key as keyof ResearchCrewFormData, value as string);
+    });
+
+    setIsExampleModalOpen(false);
+    setResult(null);
+    setSelectedRecord(null);
+    setServerError('');
+    setActiveResearchId('');
+    setRunId('');
+    setRunStatus('');
+    setIsBackgroundRunning(false);
+  };
+
+  const handleSelectResearch = async (record: ResearchRecord) => {
+    try {
+      setServerError('');
+
+      const freshRecord = await fetchResearchById(record._id);
+
+      setSelectedRecord(freshRecord);
+
+      if (
+        freshRecord.status === 'queued' ||
+        freshRecord.status === 'running'
+      ) {
+        setActiveResearchId(freshRecord._id);
+        setRunId(freshRecord.runId || '');
+        setRunStatus(freshRecord.status);
+        setIsBackgroundRunning(true);
+        setResult(null);
+        return;
+      }
+
+      setIsBackgroundRunning(false);
+      setActiveResearchId('');
+      setRunId('');
+      setRunStatus('');
+
+      if (freshRecord.status === 'failed') {
+        setResult(null);
+        setServerError(
+          freshRecord?.error?.message || 'This research run failed.'
+        );
+        return;
+      }
+
+      const parsedResult = parseResearchRecord(freshRecord);
+
+      if (!parsedResult.report_markdown) {
+        setResult(null);
+        setServerError('This research result has no report content.');
+        return;
+      }
+
+      setResult(parsedResult);
+    } catch (error: any) {
+      const message = getErrorMessage(error, 'Failed to load research result.');
+      setServerError(message);
+      toast.error(message);
+    }
+  };
+
+  const handleDeleteResearch = async (record: ResearchRecord) => {
+    try {
+      await api.delete(`/research/${record._id}`);
+
+      setResearchRuns((prev) => prev.filter((item) => item._id !== record._id));
+
+      if (selectedRecord?._id === record._id) {
+        setSelectedRecord(null);
+        setResult(null);
+        setServerError('');
+      }
+
+      toast.success('Research result deleted.');
+    } catch (error: any) {
+      toast.error(getErrorMessage(error, 'Failed to delete research result.'));
+    }
+  };
 
   const onSubmit = async (data: ResearchCrewFormData) => {
     try {
       setServerError('');
       setResult(null);
+      setSelectedRecord(null);
+      setActiveResearchId('');
       setRunId('');
       setRunStatus('');
       setIsBackgroundRunning(false);
@@ -382,26 +564,26 @@ const ResearchPage = () => {
       });
 
       const responseData = response?.data?.data;
+      const nextResearchId = responseData?.researchId;
       const nextRunId = responseData?.runId;
       const nextStatus = responseData?.status || 'queued';
 
-      if (nextRunId) {
-        setRunId(nextRunId);
-        setRunStatus(nextStatus);
-        setIsBackgroundRunning(true);
-        return;
+      if (!nextResearchId) {
+        throw new Error('API did not return a research ID.');
       }
 
-      const fallbackResult = parseResearchRunResult(responseData);
+      setActiveResearchId(nextResearchId);
+      setRunId(nextRunId || '');
+      setRunStatus(nextStatus);
+      setIsBackgroundRunning(true);
 
-      if (!fallbackResult.report_markdown) {
-        throw new Error('API did not return a research result or background run ID.');
-      }
+      toast.success('Research started in background.');
 
-      setResult(fallbackResult);
+      fetchResearchRuns();
     } catch (error: any) {
       const message = getErrorMessage(error, 'Failed to start research crew.');
       setServerError(message);
+      toast.error(message);
     }
   };
 
@@ -571,244 +753,355 @@ const ResearchPage = () => {
       )}
 
       <div className="py-8" dir="ltr">
-        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900 md:p-8">
-          <div className="mb-6">
-            <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">
-              Research Assistant
-            </h1>
-            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-              Turn a rough topic into a specialized marketing research brief,
-              run detailed research, and review the final moderated result.
-            </p>
-          </div>
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+          <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-800 dark:bg-gray-900 md:p-8">
+            <div className="mb-6">
+              <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">
+                Research Assistant
+              </h1>
+              <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                Turn a rough topic into a specialized marketing research brief,
+                run detailed research, and review the final moderated result.
+              </p>
+            </div>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-            {serverError && (
-              <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">
-                {serverError}
-              </div>
-            )}
-
-            {isBackgroundRunning && (
-              <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
-                <div className="flex items-center gap-2">
-                  <span className="loading loading-spinner loading-sm" />
-                  <span>
-                    Research is running in background. Status:{' '}
-                    <strong>{runStatusLabel}</strong>
-                  </span>
-                </div>
-
-                {runId && (
-                  <div className="mt-2 break-all font-mono text-xs opacity-80">
-                    Run ID: {runId}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <Input
-              {...register('topic', {
-                required: 'Topic is required',
-                minLength: {
-                  value: 5,
-                  message: 'Topic must be at least 5 characters',
-                },
-              })}
-              type="text"
-              label="Topic"
-              placeholder="Best CRM strategy for B2B SaaS startups"
-              error={errors.topic?.message}
-              dir="ltr"
-              autoFocus
-              disabled={isBusy}
-            />
-
-            <Input
-              {...register('audience', {
-                required: 'Audience is required',
-              })}
-              type="text"
-              label="Audience"
-              placeholder="marketing manager"
-              error={errors.audience?.message}
-              dir="ltr"
-              disabled={isBusy}
-            />
-
-            <Input
-              {...register('market', {
-                required: 'Market is required',
-              })}
-              type="text"
-              label="Market"
-              placeholder="US B2B SaaS"
-              error={errors.market?.message}
-              dir="ltr"
-              disabled={isBusy}
-            />
-
-            <Input
-              {...register('business_context')}
-              type="text"
-              label="Business Context"
-              placeholder="We sell software to B2B SaaS teams."
-              error={errors.business_context?.message}
-              dir="ltr"
-              disabled={isBusy}
-            />
-
-            <Input
-              {...register('goal')}
-              type="text"
-              label="Goal"
-              placeholder="Increase demo-to-paid conversion and improve retention."
-              error={errors.goal?.message}
-              dir="ltr"
-              disabled={isBusy}
-            />
-
-            <Input
-              {...register('product_context')}
-              type="text"
-              label="Product / Business Context"
-              placeholder="CRM platform for early-stage SaaS sales teams."
-              error={errors.product_context?.message}
-              dir="ltr"
-              disabled={isBusy}
-            />
-
-            <Button type="submit" isLoading={isBusy} disabled={isBusy}>
-              {isBackgroundRunning
-                ? 'Running in Background...'
-                : 'Run Research Crew'}
-            </Button>
-          </form>
-
-          {result?.report_markdown && (
-            <div className="mt-8 space-y-6">
-              <div className="flex flex-wrap gap-3">
-                <Button type="button" onClick={downloadPDF}>
-                  Download PDF
-                </Button>
-                <Button type="button" onClick={downloadDOCX}>
-                  Download Word
-                </Button>
-              </div>
-
-              <div className="space-y-5 rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-950">
-                <div>
-                  <span className="text-sm font-medium text-gray-500 dark:text-gray-400">
-                    Moderator Status:
-                  </span>{' '}
-                  <span
-                    className={
-                      result.approved
-                        ? 'font-medium text-green-600 dark:text-green-400'
-                        : 'font-medium text-red-600 dark:text-red-400'
-                    }
-                  >
-                    {result.approved ? 'Approved' : 'Not Approved'}
-                  </span>
-                </div>
-
-                {!!result.title && (
-                  <div>
-                    <h2 className="text-2xl font-semibold text-gray-900 dark:text-white">
-                      {result.title}
-                    </h2>
-                  </div>
-                )}
-
-                {!!result.reviewer_notes && (
-                  <div>
-                    <p className="text-sm text-gray-600 dark:text-gray-300">
-                      <span className="font-medium">Reviewer Notes:</span>{' '}
-                      {result.reviewer_notes}
-                    </p>
-                  </div>
-                )}
-
-                <div id="research-export-content" className="space-y-6">
-                  {!!result.title && (
-                    <div>
-                      <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-                        {result.title}
-                      </h1>
-                    </div>
-                  )}
-
-                  <div className="prose prose-sm max-w-none prose-headings:font-semibold prose-a:text-blue-600 dark:prose-invert dark:prose-a:text-blue-400 md:prose-base">
-                    <ReactMarkdown>{result.report_markdown}</ReactMarkdown>
-                  </div>
-
-                  {result.sources.length > 0 && (
-                    <div>
-                      <h3 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
-                        Sources
-                      </h3>
-                      <div className="space-y-3">
-                        {result.sources.map((source, index) => (
-                          <div
-                            key={`${source.url}-${index}`}
-                            className="rounded-lg border border-gray-200 p-3 dark:border-gray-800"
-                          >
-                            <a
-                              href={source.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="break-all text-sm font-medium text-blue-600 dark:text-blue-400"
-                            >
-                              {source.title || source.url}
-                            </a>
-
-                            {!!source.note && (
-                              <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                                {source.note}
-                              </p>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {result.tasks_output.length > 0 && (
-                <div>
-                  <h3 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
-                    Tasks Output
-                  </h3>
-
-                  <div className="space-y-4">
-                    {result.tasks_output.map((taskOutput, index) => (
-                      <div
-                        key={index}
-                        className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-950"
-                      >
-                        <div className="mb-2 text-sm font-medium text-gray-500 dark:text-gray-400">
-                          Task {index + 1}
-                        </div>
-                        <pre className="overflow-x-auto whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200">
-                          {taskOutput}
-                        </pre>
-                      </div>
-                    ))}
-                  </div>
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+              {serverError && (
+                <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">
+                  {serverError}
                 </div>
               )}
 
-              <div>
-                <h3 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
-                  Raw Result
-                </h3>
-                <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-800 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-200">
-                  {JSON.stringify(result.raw_result, null, 2)}
-                </pre>
+              {isBackgroundRunning && (
+                <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-300">
+                  <div className="flex items-center gap-2">
+                    <span className="loading loading-spinner loading-sm" />
+                    <span>
+                      Research is running in background. Status:{' '}
+                      <strong>{runStatusLabel}</strong>
+                    </span>
+                  </div>
+
+                  {runId && (
+                    <div className="mt-2 break-all font-mono text-xs opacity-80">
+                      Run ID: {runId}
+                    </div>
+                  )}
+
+                  {activeResearchId && (
+                    <div className="mt-1 break-all font-mono text-xs opacity-80">
+                      Research ID: {activeResearchId}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <Input
+                {...register('topic', {
+                  required: 'Topic is required',
+                  minLength: {
+                    value: 5,
+                    message: 'Topic must be at least 5 characters',
+                  },
+                })}
+                type="text"
+                label="Topic"
+                placeholder="Best CRM strategy for B2B SaaS startups"
+                error={errors.topic?.message}
+                dir="ltr"
+                autoFocus
+                disabled={isBusy}
+              />
+
+              <Input
+                {...register('audience', {
+                  required: 'Audience is required',
+                })}
+                type="text"
+                label="Audience"
+                placeholder="marketing manager"
+                error={errors.audience?.message}
+                dir="ltr"
+                disabled={isBusy}
+              />
+
+              <Input
+                {...register('market', {
+                  required: 'Market is required',
+                })}
+                type="text"
+                label="Market"
+                placeholder="US B2B SaaS"
+                error={errors.market?.message}
+                dir="ltr"
+                disabled={isBusy}
+              />
+
+              <Input
+                {...register('business_context')}
+                type="text"
+                label="Business Context"
+                placeholder="We sell software to B2B SaaS teams."
+                error={errors.business_context?.message}
+                dir="ltr"
+                disabled={isBusy}
+              />
+
+              <Input
+                {...register('goal')}
+                type="text"
+                label="Goal"
+                placeholder="Increase demo-to-paid conversion and improve retention."
+                error={errors.goal?.message}
+                dir="ltr"
+                disabled={isBusy}
+              />
+
+              <Input
+                {...register('product_context')}
+                type="text"
+                label="Product / Business Context"
+                placeholder="CRM platform for early-stage SaaS sales teams."
+                error={errors.product_context?.message}
+                dir="ltr"
+                disabled={isBusy}
+              />
+
+              <Button type="submit" isLoading={isBusy} disabled={isBusy}>
+                {isBackgroundRunning
+                  ? 'Running in Background...'
+                  : 'Run Research Crew'}
+              </Button>
+            </form>
+
+            {result?.report_markdown && (
+              <div className="mt-8 space-y-6">
+                <div className="flex flex-wrap gap-3">
+                  <Button type="button" onClick={downloadPDF}>
+                    Download PDF
+                  </Button>
+                  <Button type="button" onClick={downloadDOCX}>
+                    Download Word
+                  </Button>
+                </div>
+
+                <div className="space-y-5 rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-950">
+                  <div>
+                    <span className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                      Moderator Status:
+                    </span>{' '}
+                    <span
+                      className={
+                        result.approved
+                          ? 'font-medium text-green-600 dark:text-green-400'
+                          : 'font-medium text-red-600 dark:text-red-400'
+                      }
+                    >
+                      {result.approved ? 'Approved' : 'Not Approved'}
+                    </span>
+                  </div>
+
+                  {!!result.title && (
+                    <div>
+                      <h2 className="text-2xl font-semibold text-gray-900 dark:text-white">
+                        {result.title}
+                      </h2>
+                    </div>
+                  )}
+
+                  {!!result.reviewer_notes && (
+                    <div>
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
+                        <span className="font-medium">Reviewer Notes:</span>{' '}
+                        {result.reviewer_notes}
+                      </p>
+                    </div>
+                  )}
+
+                  <div id="research-export-content" className="space-y-6">
+                    {!!result.title && (
+                      <div>
+                        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+                          {result.title}
+                        </h1>
+                      </div>
+                    )}
+
+                    <div className="prose prose-sm max-w-none prose-headings:font-semibold prose-a:text-blue-600 dark:prose-invert dark:prose-a:text-blue-400 md:prose-base">
+                      <ReactMarkdown>{result.report_markdown}</ReactMarkdown>
+                    </div>
+
+                    {result.sources.length > 0 && (
+                      <div>
+                        <h3 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
+                          Sources
+                        </h3>
+                        <div className="space-y-3">
+                          {result.sources.map((source, index) => (
+                            <div
+                              key={`${source.url}-${index}`}
+                              className="rounded-lg border border-gray-200 p-3 dark:border-gray-800"
+                            >
+                              <a
+                                href={source.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="break-all text-sm font-medium text-blue-600 dark:text-blue-400"
+                              >
+                                {source.title || source.url}
+                              </a>
+
+                              {!!source.note && (
+                                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                                  {source.note}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {result.tasks_output.length > 0 && (
+                  <div>
+                    <h3 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
+                      Tasks Output
+                    </h3>
+
+                    <div className="space-y-4">
+                      {result.tasks_output.map((taskOutput, index) => (
+                        <div
+                          key={index}
+                          className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-950"
+                        >
+                          <div className="mb-2 text-sm font-medium text-gray-500 dark:text-gray-400">
+                            Task {index + 1}
+                          </div>
+                          <pre className="overflow-x-auto whitespace-pre-wrap text-sm text-gray-800 dark:text-gray-200">
+                            {taskOutput}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <h3 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">
+                    Raw Result
+                  </h3>
+                  <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-800 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-200">
+                    {JSON.stringify(result.raw_result, null, 2)}
+                  </pre>
+                </div>
               </div>
+            )}
+          </div>
+
+          <aside className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Previous Research
+                </h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Saved from MongoDB
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-outline btn-xs"
+                onClick={fetchResearchRuns}
+                disabled={isLoadingHistory}
+              >
+                {isLoadingHistory ? 'Loading...' : 'Refresh'}
+              </button>
             </div>
-          )}
+
+            {researchRuns.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-gray-300 p-4 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                No research results yet.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {researchRuns.map((record) => (
+                  <div
+                    key={record._id}
+                    className={`rounded-xl border p-4 transition ${
+                      selectedRecord?._id === record._id
+                        ? 'border-primary bg-primary/5'
+                        : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-950'
+                    }`}
+                  >
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <button
+                        type="button"
+                        className="text-left"
+                        onClick={() => handleSelectResearch(record)}
+                      >
+                        <h3 className="line-clamp-2 text-sm font-semibold text-gray-900 dark:text-white">
+                          {record.reportTitle ||
+                            record.title ||
+                            record.topic ||
+                            'Untitled research'}
+                        </h3>
+                      </button>
+
+                      <span
+                        className={`badge badge-sm ${getStatusClass(
+                          record.status
+                        )}`}
+                      >
+                        {record.status}
+                      </span>
+                    </div>
+
+                    <div className="space-y-1 text-xs text-gray-500 dark:text-gray-400">
+                      <div>
+                        <span className="font-medium">Topic:</span>{' '}
+                        {record.topic}
+                      </div>
+                      <div>
+                        <span className="font-medium">Market:</span>{' '}
+                        {record.market || '-'}
+                      </div>
+                      <div>
+                        <span className="font-medium">Created:</span>{' '}
+                        {formatDate(record.createdAt)}
+                      </div>
+                    </div>
+
+                    {record.error?.message && (
+                      <div className="mt-2 rounded-lg bg-red-50 p-2 text-xs text-red-600 dark:bg-red-900/20 dark:text-red-400">
+                        {record.error.message}
+                      </div>
+                    )}
+
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-xs"
+                        onClick={() => handleSelectResearch(record)}
+                      >
+                        View
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-error btn-outline btn-xs"
+                        onClick={() => handleDeleteResearch(record)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </aside>
         </div>
       </div>
     </DashboardLayout>
@@ -816,4 +1109,5 @@ const ResearchPage = () => {
 };
 
 export const getServerSideProps = withAuth();
+
 export default ResearchPage;

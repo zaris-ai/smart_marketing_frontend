@@ -54,12 +54,6 @@ export const menuItems: MenuItem[] = [
     section: "top",
   },
   {
-    label: "Blog",
-    href: "/dashboard/blog",
-    icon: PencilIcon,
-    section: "top",
-  },
-  {
     label: "Searcher",
     href: "/dashboard/searcher",
     icon: GlobeAltIcon,
@@ -111,6 +105,18 @@ export const menuItems: MenuItem[] = [
     label: "Smart Blog",
     href: "/dashboard/smart_blog",
     icon: PencilSquareIcon,
+    section: "seo",
+  },
+  {
+    label: "Manual Blog",
+    href: "/dashboard/manual-blogs",
+    icon: PencilSquareIcon,
+    section: "seo",
+  },
+  {
+    label: "Blog",
+    href: "/dashboard/blog",
+    icon: PencilIcon,
     section: "seo",
   },
   {
