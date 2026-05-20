@@ -195,9 +195,9 @@ const GmailEmailDetailPage = () => {
       setThread(
         threadData
           ? {
-              ...threadData,
-              messages: sortedMessages,
-            }
+            ...threadData,
+            messages: sortedMessages,
+          }
           : null
       );
     } else {
@@ -222,9 +222,9 @@ const GmailEmailDetailPage = () => {
     } catch (err: any) {
       setError(
         err?.response?.data?.error ||
-          err?.response?.data?.message ||
-          err?.message ||
-          'Failed to load email details'
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to load email details'
       );
     } finally {
       setLoading(false);
@@ -248,13 +248,35 @@ const GmailEmailDetailPage = () => {
     } catch (err: any) {
       setError(
         err?.response?.data?.error ||
-          err?.response?.data?.message ||
-          err?.message ||
-          'Failed to save email'
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to save email'
       );
     } finally {
       setSaving(false);
     }
+  };
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const pollSavedEmailForAnalysis = async (savedId: string) => {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const response = await api.get(`/gmail/saved/${savedId}`);
+      const data: SavedEmail | null = response?.data?.data || null;
+
+      if (data) {
+        setSavedEmail(data);
+      }
+
+      if (data?.latestAnalysis) {
+        setAnalysisResult(data.latestAnalysis);
+        return data.latestAnalysis;
+      }
+
+      await sleep(2000);
+    }
+
+    return null;
   };
 
   const handleAnalyze = async () => {
@@ -274,19 +296,33 @@ const GmailEmailDetailPage = () => {
         cta_goal: 'reply clearly and move the conversation to the next useful step',
       });
 
-      setAnalysisResult(response?.data?.data || null);
+      const savedId =
+        response?.data?.savedEmail?._id ||
+        savedEmail?._id ||
+        null;
 
-      if (isSavedMode) {
-        await loadSavedEmail(id);
-      } else if (response?.data?.savedEmail?._id) {
+      if (response?.data?.savedEmail) {
         setSavedEmail(response.data.savedEmail);
+      }
+
+      if (!savedId) {
+        setAnalysisError('Analysis started, but saved email id was not returned.');
+        return;
+      }
+
+      const result = await pollSavedEmailForAnalysis(savedId);
+
+      if (!result) {
+        setAnalysisError(
+          'Analysis started, but the result is not ready yet. Refresh this email after the background job finishes.'
+        );
       }
     } catch (err: any) {
       setAnalysisError(
         err?.response?.data?.error ||
-          err?.response?.data?.message ||
-          err?.message ||
-          'Failed to analyze email'
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to analyze email'
       );
     } finally {
       setAnalyzing(false);
@@ -307,9 +343,9 @@ const GmailEmailDetailPage = () => {
     } catch (err: any) {
       setError(
         err?.response?.data?.error ||
-          err?.response?.data?.message ||
-          err?.message ||
-          'Failed to update saved email'
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to update saved email'
       );
     } finally {
       setUpdating(false);
@@ -342,9 +378,9 @@ const GmailEmailDetailPage = () => {
     } catch (err: any) {
       setError(
         err?.response?.data?.error ||
-          err?.response?.data?.message ||
-          err?.message ||
-          'Failed to delete saved email'
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to delete saved email'
       );
     } finally {
       setDeleting(false);
@@ -618,11 +654,10 @@ const GmailEmailDetailPage = () => {
                   {thread.messages.map((message, index) => (
                     <div
                       key={message.id || `${index}`}
-                      className={`rounded-xl border p-5 ${
-                        message.id === (email?.id || savedEmail?.gmailId)
+                      className={`rounded-xl border p-5 ${message.id === (email?.id || savedEmail?.gmailId)
                           ? 'border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/20'
                           : 'border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-800/50'
-                      }`}
+                        }`}
                     >
                       <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                         <div>

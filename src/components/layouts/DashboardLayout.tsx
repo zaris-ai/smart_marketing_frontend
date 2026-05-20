@@ -2,6 +2,7 @@ import { DashboardHeader, DashboardSidebar } from '@/components/dashboard';
 import { cn, getLogoutUrl } from '@/utils';
 import { signOut } from 'next-auth/react';
 import { ReactNode, useState } from 'react';
+import PanelAgentChatbot from '../PanelAgentChatbot';
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -60,6 +61,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ children }) => {
         {/* Page Content */}
         <main className="p-6 mt-4">{children}</main>
       </div>
+      <PanelAgentChatbot />
     </div>
   );
 };
