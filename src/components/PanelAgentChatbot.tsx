@@ -13,10 +13,13 @@ import { toast } from 'sonner';
 import {
   ArrowPathIcon,
   ArrowsPointingOutIcon,
+  ChartBarIcon,
   ChatBubbleLeftRightIcon,
   ClipboardDocumentIcon,
+  CircleStackIcon,
   PaperAirplaneIcon,
   PencilSquareIcon,
+  SparklesIcon,
   TrashIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
@@ -24,6 +27,8 @@ import {
 import api from '@/lib/axios';
 
 type ChatRole = 'user' | 'assistant';
+
+type ChatScope = 'panel' | 'database' | 'analytics';
 
 type RouteLink = {
   label: string;
@@ -38,6 +43,7 @@ type ChatMessage = {
   confidence?: 'high' | 'medium' | 'low';
   sources?: string[];
   links?: RouteLink[];
+  scope?: ChatScope;
 };
 
 type ChatSize = {
@@ -64,22 +70,25 @@ type PanelChatResponse = {
   };
 };
 
-const CHAT_MESSAGES_KEY = 'panel-agent-chat-messages-v5';
+const CHAT_MESSAGES_KEY = 'panel-agent-chat-messages-v8';
 const CHAT_SIZE_KEY = 'panel-agent-chat-size-v2';
+const CHAT_SCOPE_KEY = 'panel-agent-chat-scope-v3';
+
+const DEFAULT_SCOPE: ChatScope = 'panel';
 
 const DEFAULT_SIZE: ChatSize = {
-  width: 430,
-  height: 660,
+  width: 460,
+  height: 690,
 };
 
 const MIN_SIZE: ChatSize = {
-  width: 340,
-  height: 460,
+  width: 380,
+  height: 500,
 };
 
 const MAX_SIZE: ChatSize = {
-  width: 820,
-  height: 860,
+  width: 880,
+  height: 900,
 };
 
 const DEFAULT_MESSAGES: ChatMessage[] = [
@@ -87,8 +96,9 @@ const DEFAULT_MESSAGES: ChatMessage[] = [
     role: 'assistant',
     type: 'text',
     content:
-      'Hi 👋 Ask me about Arka, Shopify analytics, SEO tools, blog workflows, or panel features.',
+      'Hi 👋 Choose Panel for Arka/panel questions, Database for internal records, or Analytics for Search Console, GA4, and Clarity questions.',
     links: [],
+    scope: 'panel',
   },
 ];
 
@@ -115,8 +125,168 @@ const ALLOWED_PANEL_ROUTES = [
   '/dashboard/users',
 ];
 
+const SCOPE_OPTIONS: Array<{
+  value: ChatScope;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'panel',
+    label: 'Panel',
+    description: 'Arka, pages, workflows',
+  },
+  {
+    value: 'database',
+    label: 'Database',
+    description: 'Records, counts, status',
+  },
+  {
+    value: 'analytics',
+    label: 'Analytics',
+    description: 'GSC, GA4, Clarity',
+  },
+];
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function isChatScope(value: unknown): value is ChatScope {
+  return value === 'panel' || value === 'database' || value === 'analytics';
+}
+
+function safeParseScope(value: string | null): ChatScope {
+  return isChatScope(value) ? value : DEFAULT_SCOPE;
+}
+
+function getScopeLabel(scope?: ChatScope) {
+  if (scope === 'database') return 'Database';
+  if (scope === 'analytics') return 'Analytics';
+  return 'Panel';
+}
+
+function getScopeBadgeClass(scope?: ChatScope) {
+  if (scope === 'database') {
+    return 'bg-purple-50 text-purple-700 ring-purple-100';
+  }
+
+  if (scope === 'analytics') {
+    return 'bg-emerald-50 text-emerald-700 ring-emerald-100';
+  }
+
+  return 'bg-blue-50 text-blue-700 ring-blue-100';
+}
+
+function getScopeSubtitle(scope: ChatScope) {
+  if (scope === 'database') return 'Database question mode';
+  if (scope === 'analytics') return 'Analytics insight mode';
+  return 'Arka marketing assistant';
+}
+
+function getScopeDescription(scope: ChatScope) {
+  if (scope === 'database') {
+    return 'Backend will answer from approved database models.';
+  }
+
+  if (scope === 'analytics') {
+    return 'Backend will answer from connected analytics providers.';
+  }
+
+  return 'Backend will answer from Arka and panel knowledge files.';
+}
+
+function getPlaceholder(scope: ChatScope, editing: boolean) {
+  if (editing) return 'Edit and resend your question...';
+
+  if (scope === 'database') {
+    return 'Ask about database records, counts, statuses, or summaries...';
+  }
+
+  if (scope === 'analytics') {
+    return 'Ask about Search Console, GA4, Clarity, traffic, pages, or users...';
+  }
+
+  return 'Ask about Arka, panel pages, workflows, or features...';
+}
+
+function getScopeActiveClass(scope: ChatScope) {
+  if (scope === 'database') {
+    return 'bg-purple-600 text-white shadow-lg shadow-purple-950/20 ring-1 ring-purple-200/40';
+  }
+
+  if (scope === 'analytics') {
+    return 'bg-emerald-600 text-white shadow-lg shadow-emerald-950/20 ring-1 ring-emerald-200/40';
+  }
+
+  return 'bg-blue-600 text-white shadow-lg shadow-blue-950/20 ring-1 ring-blue-200/40';
+}
+
+function getScopeInactiveClass(scope: ChatScope) {
+  if (scope === 'database') {
+    return 'text-purple-100/80 hover:bg-purple-500/20 hover:text-white';
+  }
+
+  if (scope === 'analytics') {
+    return 'text-emerald-100/80 hover:bg-emerald-500/20 hover:text-white';
+  }
+
+  return 'text-blue-100/80 hover:bg-blue-500/20 hover:text-white';
+}
+
+function getScopeDotClass(scope: ChatScope, active: boolean) {
+  if (active) return 'bg-white';
+  if (scope === 'database') return 'bg-purple-300/70';
+  if (scope === 'analytics') return 'bg-emerald-300/70';
+  return 'bg-blue-300/70';
+}
+
+function getSendButtonClass({
+  scope,
+  editing,
+  disabled,
+}: {
+  scope: ChatScope;
+  editing: boolean;
+  disabled: boolean;
+}) {
+  const base =
+    'flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white shadow-sm transition disabled:cursor-not-allowed disabled:shadow-none';
+
+  if (disabled) {
+    return `${base} bg-slate-300 text-white`;
+  }
+
+  if (editing) {
+    return `${base} bg-amber-500 hover:bg-amber-600`;
+  }
+
+  if (scope === 'database') {
+    return `${base} bg-purple-600 hover:bg-purple-700`;
+  }
+
+  if (scope === 'analytics') {
+    return `${base} bg-emerald-600 hover:bg-emerald-700`;
+  }
+
+  return `${base} bg-blue-600 hover:bg-blue-700`;
+}
+
+function ScopeIcon({
+  scope,
+  className = 'h-4 w-4',
+}: {
+  scope: ChatScope;
+  className?: string;
+}) {
+  if (scope === 'database') {
+    return <CircleStackIcon className={className} />;
+  }
+
+  if (scope === 'analytics') {
+    return <ChartBarIcon className={className} />;
+  }
+
+  return <SparklesIcon className={className} />;
 }
 
 function isSafeInternalRoute(href: string) {
@@ -208,7 +378,6 @@ function parseAgentAnswer(raw: string): ChatMessage {
 
   try {
     const jsonText = extractFirstJsonObject(raw) || raw;
-
     const parsed = JSON.parse(jsonText) as AgentPayload;
 
     const answer = String(parsed.answer || '').trim();
@@ -247,6 +416,7 @@ function safeParseMessages(value: string | null): ChatMessage[] {
           confidence?: unknown;
           sources?: unknown;
           links?: unknown;
+          scope?: unknown;
         };
 
         return {
@@ -262,6 +432,7 @@ function safeParseMessages(value: string | null): ChatMessage[] {
               : undefined,
           sources: Array.isArray(record?.sources) ? record.sources : [],
           links: normalizeLinks(record?.links),
+          scope: isChatScope(record?.scope) ? record.scope : undefined,
         } as ChatMessage;
       })
       .filter((item) => item.content);
@@ -334,6 +505,7 @@ export default function PanelAgentChatbot() {
   const [loading, setLoading] = useState(false);
   const [size, setSize] = useState<ChatSize>(DEFAULT_SIZE);
   const [messages, setMessages] = useState<ChatMessage[]>(DEFAULT_MESSAGES);
+  const [chatScope, setChatScope] = useState<ChatScope>(DEFAULT_SCOPE);
   const [previewMessageIndex, setPreviewMessageIndex] = useState<number | null>(
     null
   );
@@ -359,6 +531,8 @@ export default function PanelAgentChatbot() {
     );
 
     setSize(safeParseSize(window.localStorage.getItem(CHAT_SIZE_KEY)));
+
+    setChatScope(safeParseScope(window.localStorage.getItem(CHAT_SCOPE_KEY)));
   }, []);
 
   useEffect(() => {
@@ -375,6 +549,12 @@ export default function PanelAgentChatbot() {
 
     window.localStorage.setItem(CHAT_SIZE_KEY, JSON.stringify(size));
   }, [size, mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+
+    window.localStorage.setItem(CHAT_SCOPE_KEY, chatScope);
+  }, [chatScope, mounted]);
 
   useEffect(() => {
     if (!open) return;
@@ -438,10 +618,7 @@ export default function PanelAgentChatbot() {
     return question.trim().length > 0 && !loading;
   }, [question, loading]);
 
-  async function copyToClipboard(
-    value: string,
-    successMessage = 'Copied'
-  ) {
+  async function copyToClipboard(value: string, successMessage = 'Copied') {
     const text = value.trim();
 
     if (!text) {
@@ -457,16 +634,24 @@ export default function PanelAgentChatbot() {
     }
   }
 
+  function handleScopeChange(nextScope: ChatScope) {
+    setChatScope(nextScope);
+    setEditingMessageIndex(null);
+    setQuestion('');
+
+    window.setTimeout(() => {
+      inputRef.current?.focus();
+    }, 60);
+  }
+
   function handleSaveChat() {
     window.localStorage.setItem(
       CHAT_MESSAGES_KEY,
       JSON.stringify(messages.slice(-50))
     );
 
-    window.localStorage.setItem(
-      CHAT_SIZE_KEY,
-      JSON.stringify(size)
-    );
+    window.localStorage.setItem(CHAT_SIZE_KEY, JSON.stringify(size));
+    window.localStorage.setItem(CHAT_SCOPE_KEY, chatScope);
 
     toast.success('Chat saved');
   }
@@ -476,8 +661,10 @@ export default function PanelAgentChatbot() {
     setQuestion('');
     setPreviewMessageIndex(null);
     setEditingMessageIndex(null);
+    setChatScope(DEFAULT_SCOPE);
 
     window.localStorage.removeItem(CHAT_MESSAGES_KEY);
+    window.localStorage.removeItem(CHAT_SCOPE_KEY);
 
     toast.success('Chat deleted');
   }
@@ -487,9 +674,7 @@ export default function PanelAgentChatbot() {
     toast.success('Chat size reset');
   }
 
-  function handleResizeStart(
-    event: ReactPointerEvent<HTMLButtonElement>
-  ) {
+  function handleResizeStart(event: ReactPointerEvent<HTMLButtonElement>) {
     event.preventDefault();
 
     resizeStartRef.current = {
@@ -519,6 +704,7 @@ export default function PanelAgentChatbot() {
     if (!message || message.role !== 'user') return;
 
     setQuestion(message.content);
+    setChatScope(message.scope || DEFAULT_SCOPE);
     setEditingMessageIndex(index);
     setOpen(true);
 
@@ -534,13 +720,15 @@ export default function PanelAgentChatbot() {
 
   async function sendQuestion(
     text: string,
-    baseMessages: ChatMessage[]
+    baseMessages: ChatMessage[],
+    scope: ChatScope
   ) {
     const userMessage: ChatMessage = {
       role: 'user',
       type: 'text',
       content: text,
       links: [],
+      scope,
     };
 
     const nextMessages = [...baseMessages, userMessage];
@@ -550,16 +738,15 @@ export default function PanelAgentChatbot() {
     setLoading(true);
 
     try {
-      const response = await api.post<PanelChatResponse>(
-        '/panel-chat/ask',
-        {
-          question: text,
-          history: nextMessages.slice(-8).map((item) => ({
-            role: item.role,
-            content: item.content,
-          })),
-        }
-      );
+      const response = await api.post<PanelChatResponse>('/panel-chat/ask', {
+        question: text,
+        scope,
+        history: nextMessages.slice(-8).map((item) => ({
+          role: item.role,
+          content: item.content,
+          scope: item.scope,
+        })),
+      });
 
       const rawAnswer =
         response.data?.data?.answer ||
@@ -567,10 +754,17 @@ export default function PanelAgentChatbot() {
 
       const parsedAnswer = parseAgentAnswer(rawAnswer);
 
-      setMessages((current) => [...current, parsedAnswer]);
+      setMessages((current) => [
+        ...current,
+        {
+          ...parsedAnswer,
+          scope,
+        },
+      ]);
     } catch (error: any) {
       const message =
         error?.response?.data?.message ||
+        error?.response?.data?.error ||
         error?.message ||
         'Panel agent failed to answer.';
 
@@ -582,8 +776,13 @@ export default function PanelAgentChatbot() {
           role: 'assistant',
           type: 'text',
           content:
-            'Sorry, I could not answer right now. Please check the backend and Python crew logs.',
+            scope === 'database'
+              ? 'Sorry, I could not answer from the database right now. Please check the backend database service logs.'
+              : scope === 'analytics'
+                ? 'Sorry, I could not answer from analytics right now. Please check the analytics connector settings and backend logs.'
+                : 'Sorry, I could not answer right now. Please check the backend and Python crew logs.',
           links: [],
+          scope,
         },
       ]);
     } finally {
@@ -598,10 +797,13 @@ export default function PanelAgentChatbot() {
 
     if (!message || message.role !== 'user') return;
 
+    const resendScope = message.scope || chatScope;
+
+    setChatScope(resendScope);
     setEditingMessageIndex(null);
     setQuestion('');
 
-    await sendQuestion(message.content, messages);
+    await sendQuestion(message.content, messages, resendScope);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -616,22 +818,20 @@ export default function PanelAgentChatbot() {
 
       setEditingMessageIndex(null);
 
-      await sendQuestion(text, baseMessages);
+      await sendQuestion(text, baseMessages, chatScope);
 
       toast.success('Message edited and resent');
 
       return;
     }
 
-    await sendQuestion(text, messages);
+    await sendQuestion(text, messages, chatScope);
   }
 
   if (!mounted) return null;
 
   const previewMessage =
-    previewMessageIndex !== null
-      ? messages[previewMessageIndex]
-      : null;
+    previewMessageIndex !== null ? messages[previewMessageIndex] : null;
 
   return createPortal(
     <>
@@ -722,13 +922,13 @@ export default function PanelAgentChatbot() {
               type="button"
               onPointerDown={handleResizeStart}
               className="absolute left-3 top-3 z-20 flex h-8 w-8 cursor-nwse-resize items-center justify-center rounded-full bg-white/15 text-white ring-1 ring-white/25 backdrop-blur transition hover:bg-white/25"
+              aria-label="Resize chat"
             >
               <ArrowsPointingOutIcon className="h-4 w-4" />
             </button>
 
             <div className="relative overflow-hidden bg-gradient-to-br from-blue-600 via-indigo-600 to-slate-900 px-4 py-4 pl-14 text-white">
               <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-white/10" />
-
               <div className="absolute -bottom-10 left-10 h-24 w-24 rounded-full bg-white/10" />
 
               <div className="relative flex items-center justify-between gap-3">
@@ -739,15 +939,21 @@ export default function PanelAgentChatbot() {
 
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold">
-                        Panel Agent
-                      </p>
-
+                      <p className="text-sm font-bold">Panel Agent</p>
                       <span className="h-2 w-2 rounded-full bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.9)]" />
                     </div>
 
-                    <p className="text-xs text-white/75">
-                      Arka marketing assistant
+                    <p
+                      className={[
+                        'text-xs font-medium',
+                        chatScope === 'database'
+                          ? 'text-purple-100'
+                          : chatScope === 'analytics'
+                            ? 'text-emerald-100'
+                            : 'text-blue-100',
+                      ].join(' ')}
+                    >
+                      {getScopeSubtitle(chatScope)}
                     </p>
                   </div>
                 </div>
@@ -757,6 +963,7 @@ export default function PanelAgentChatbot() {
                     type="button"
                     onClick={handleSaveChat}
                     className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+                    aria-label="Save chat"
                   >
                     💾
                   </button>
@@ -765,6 +972,7 @@ export default function PanelAgentChatbot() {
                     type="button"
                     onClick={handleDeleteChat}
                     className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-red-500/70"
+                    aria-label="Delete chat"
                   >
                     <TrashIcon className="h-5 w-5" />
                   </button>
@@ -773,6 +981,7 @@ export default function PanelAgentChatbot() {
                     type="button"
                     onClick={handleResetSize}
                     className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+                    aria-label="Reset chat size"
                   >
                     ↺
                   </button>
@@ -781,10 +990,52 @@ export default function PanelAgentChatbot() {
                     type="button"
                     onClick={() => setOpen(false)}
                     className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+                    aria-label="Close chat"
                   >
                     <XMarkIcon className="h-5 w-5" />
                   </button>
                 </div>
+              </div>
+
+              <div className="relative mt-4 grid grid-cols-3 gap-2 rounded-2xl bg-white/10 p-1 ring-1 ring-white/15 backdrop-blur">
+                {SCOPE_OPTIONS.map((option) => {
+                  const active = chatScope === option.value;
+
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={loading}
+                      onClick={() => handleScopeChange(option.value)}
+                      className={[
+                        'rounded-xl px-2 py-2 text-left transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60',
+                        active
+                          ? getScopeActiveClass(option.value)
+                          : getScopeInactiveClass(option.value),
+                      ].join(' ')}
+                    >
+                      <span className="flex items-center gap-1.5 text-[11px] font-bold">
+                        <span
+                          className={[
+                            'h-2 w-2 rounded-full',
+                            getScopeDotClass(option.value, active),
+                          ].join(' ')}
+                        />
+
+                        {option.label}
+                      </span>
+
+                      <span
+                        className={[
+                          'mt-0.5 block text-[9px] leading-4 transition-colors',
+                          active ? 'text-white/85' : 'text-white/50',
+                        ].join(' ')}
+                      >
+                        {option.description}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -794,14 +1045,9 @@ export default function PanelAgentChatbot() {
             >
               {messages.map((message, index) => {
                 const isUser = message.role === 'user';
-
-                const isEditing =
-                  editingMessageIndex === index;
-
+                const isEditing = editingMessageIndex === index;
                 const isWelcomeMessage =
-                  index === 0 &&
-                  message.role === 'assistant';
-
+                  index === 0 && message.role === 'assistant';
                 const hasHtml =
                   message.role === 'assistant' &&
                   message.type === 'html' &&
@@ -811,9 +1057,7 @@ export default function PanelAgentChatbot() {
                   <div
                     key={`${message.role}-${index}`}
                     className={`flex ${
-                      isUser
-                        ? 'justify-end'
-                        : 'justify-start'
+                      isUser ? 'justify-end' : 'justify-start'
                     }`}
                   >
                     <div
@@ -826,10 +1070,24 @@ export default function PanelAgentChatbot() {
                           : 'rounded-bl-md border border-slate-200/80 bg-white text-slate-800 shadow-[0_2px_10px_rgba(15,23,42,0.04)]',
                       ].join(' ')}
                     >
-                      <div
-                        className="whitespace-pre-wrap"
-                        dir="auto"
-                      >
+                      {isUser ? (
+                        <div className="mb-2 flex justify-end">
+                          <span
+                            className={[
+                              'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1',
+                              getScopeBadgeClass(message.scope),
+                            ].join(' ')}
+                          >
+                            <ScopeIcon
+                              scope={message.scope || DEFAULT_SCOPE}
+                              className="h-3 w-3"
+                            />
+                            {getScopeLabel(message.scope)}
+                          </span>
+                        </div>
+                      ) : null}
+
+                      <div className="whitespace-pre-wrap" dir="auto">
                         {message.content}
                       </div>
 
@@ -837,9 +1095,7 @@ export default function PanelAgentChatbot() {
                         <div
                           className={[
                             'mt-2 flex flex-wrap items-center gap-2',
-                            isUser
-                              ? 'justify-end'
-                              : 'justify-start',
+                            isUser ? 'justify-end' : 'justify-start',
                           ].join(' ')}
                         >
                           <button
@@ -847,9 +1103,7 @@ export default function PanelAgentChatbot() {
                             onClick={() =>
                               copyToClipboard(
                                 message.content,
-                                isUser
-                                  ? 'Question copied'
-                                  : 'Answer copied'
+                                isUser ? 'Question copied' : 'Answer copied'
                               )
                             }
                             className={[
@@ -868,9 +1122,7 @@ export default function PanelAgentChatbot() {
                               <button
                                 type="button"
                                 disabled={loading}
-                                onClick={() =>
-                                  handleEditMessage(index)
-                                }
+                                onClick={() => handleEditMessage(index)}
                                 className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-semibold text-white transition hover:bg-white/25 disabled:opacity-50"
                               >
                                 <PencilSquareIcon className="h-3.5 w-3.5" />
@@ -880,9 +1132,7 @@ export default function PanelAgentChatbot() {
                               <button
                                 type="button"
                                 disabled={loading}
-                                onClick={() =>
-                                  handleResendMessage(index)
-                                }
+                                onClick={() => handleResendMessage(index)}
                                 className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-semibold text-white transition hover:bg-white/25 disabled:opacity-50"
                               >
                                 <ArrowPathIcon className="h-3.5 w-3.5" />
@@ -892,18 +1142,13 @@ export default function PanelAgentChatbot() {
                           ) : (
                             <>
                               <ConfidenceBadge
-                                confidence={
-                                  message.confidence
-                                }
+                                confidence={message.confidence}
                               />
 
                               {message.sources?.length ? (
                                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                                  {message.sources.length}{' '}
-                                  source
-                                  {message.sources.length > 1
-                                    ? 's'
-                                    : ''}
+                                  {message.sources.length} source
+                                  {message.sources.length > 1 ? 's' : ''}
                                 </span>
                               ) : null}
 
@@ -912,9 +1157,7 @@ export default function PanelAgentChatbot() {
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      setPreviewMessageIndex(
-                                        index
-                                      )
+                                      setPreviewMessageIndex(index)
                                     }
                                     className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 transition hover:bg-blue-100"
                                   >
@@ -940,23 +1183,17 @@ export default function PanelAgentChatbot() {
                         </div>
                       ) : null}
 
-                      {!isUser &&
-                      message.links?.length ? (
+                      {!isUser && message.links?.length ? (
                         <div className="mt-3 flex flex-wrap gap-2">
                           {message.links.map((link) => (
                             <button
                               type="button"
                               key={`${link.href}-${link.label}`}
-                              onClick={() =>
-                                handleRouteClick(link)
-                              }
+                              onClick={() => handleRouteClick(link)}
                               className="inline-flex items-center gap-1 rounded-full bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-700"
                             >
                               {link.label}
-
-                              <span aria-hidden="true">
-                                →
-                              </span>
+                              <span aria-hidden="true">→</span>
                             </button>
                           ))}
                         </div>
@@ -982,8 +1219,7 @@ export default function PanelAgentChatbot() {
               {editingMessageIndex !== null ? (
                 <div className="mb-2 flex items-center justify-between rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                   <span>
-                    Editing previous question.
-                    Sending will replace the
+                    Editing previous question. Sending will replace the
                     conversation after it.
                   </span>
 
@@ -997,31 +1233,60 @@ export default function PanelAgentChatbot() {
                 </div>
               ) : null}
 
-              <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 p-1.5 transition focus-within:border-blue-400 focus-within:bg-white focus-within:ring-4 focus-within:ring-blue-100">
+              <div className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span
+                    className={[
+                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-1',
+                      getScopeBadgeClass(chatScope),
+                    ].join(' ')}
+                  >
+                    <ScopeIcon scope={chatScope} className="h-4 w-4" />
+                  </span>
+
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-slate-700">
+                      Current mode: {getScopeLabel(chatScope)}
+                    </p>
+
+                    <p className="truncate text-[11px] text-slate-500">
+                      {getScopeDescription(chatScope)}
+                    </p>
+                  </div>
+                </div>
+
+                <span
+                  className={[
+                    'shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ring-1',
+                    getScopeBadgeClass(chatScope),
+                  ].join(' ')}
+                >
+                  {getScopeLabel(chatScope)}
+                </span>
+              </div>
+
+              <div className="flex min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 p-1.5 transition focus-within:border-blue-400 focus-within:bg-white focus-within:ring-4 focus-within:ring-blue-100">
                 <input
                   ref={inputRef}
                   value={question}
-                  onChange={(event) =>
-                    setQuestion(event.target.value)
-                  }
-                  placeholder={
+                  onChange={(event) => setQuestion(event.target.value)}
+                  placeholder={getPlaceholder(
+                    chatScope,
                     editingMessageIndex !== null
-                      ? 'Edit and resend your question...'
-                      : 'Ask a short question...'
-                  }
-                  className="h-10 flex-1 bg-transparent px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400"
+                  )}
+                  className="h-10 min-w-0 flex-1 bg-transparent px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400"
                   dir="auto"
                 />
 
                 <button
                   type="submit"
                   disabled={!canSend}
-                  className={[
-                    'flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white transition disabled:cursor-not-allowed disabled:bg-slate-300',
-                    editingMessageIndex !== null
-                      ? 'bg-amber-500 hover:bg-amber-600'
-                      : 'bg-blue-600 hover:bg-blue-700',
-                  ].join(' ')}
+                  className={getSendButtonClass({
+                    scope: chatScope,
+                    editing: editingMessageIndex !== null,
+                    disabled: !canSend,
+                  })}
+                  aria-label="Send question"
                 >
                   {loading ? (
                     <span className="panel-chat-spinner" />
@@ -1040,7 +1305,6 @@ export default function PanelAgentChatbot() {
             aria-label="Open panel agent chatbot"
           >
             <span className="absolute -right-0.5 -top-0.5 h-4 w-4 rounded-full border-2 border-white bg-emerald-400" />
-
             <ChatBubbleLeftRightIcon className="h-7 w-7" />
           </button>
         )}
@@ -1059,9 +1323,7 @@ export default function PanelAgentChatbot() {
                 </p>
 
                 <p className="text-xs text-slate-500">
-                  Generated from technical
-                  Markdown and reviewed by the
-                  agent.
+                  Generated from technical Markdown and reviewed by the agent.
                 </p>
               </div>
 
@@ -1069,10 +1331,7 @@ export default function PanelAgentChatbot() {
                 <button
                   type="button"
                   onClick={() =>
-                    copyToClipboard(
-                      previewMessage.html || '',
-                      'HTML copied'
-                    )
+                    copyToClipboard(previewMessage.html || '', 'HTML copied')
                   }
                   className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
                 >
@@ -1081,10 +1340,9 @@ export default function PanelAgentChatbot() {
 
                 <button
                   type="button"
-                  onClick={() =>
-                    setPreviewMessageIndex(null)
-                  }
+                  onClick={() => setPreviewMessageIndex(null)}
                   className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200"
+                  aria-label="Close preview"
                 >
                   <XMarkIcon className="h-5 w-5" />
                 </button>
