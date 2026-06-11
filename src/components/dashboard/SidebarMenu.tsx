@@ -43,6 +43,7 @@ export const SidebarMenu: React.FC<SidebarMenuProps> = ({
   const seoItems = filterByPermission(menuItems.filter((item) => item.section === 'seo'));
   const crmItems = filterByPermission(menuItems.filter((item) => item.section === 'crm'));
   const instaItems = filterByPermission(menuItems.filter((item) => item.section === 'instagram'));
+  const usersItems = filterByPermission(menuItems.filter((item) => item.section === 'users'));
 
   const renderMenuItem = (item: MenuItem) => (
     <Link
@@ -104,6 +105,17 @@ export const SidebarMenu: React.FC<SidebarMenuProps> = ({
 
       <div className="space-y-1 mb-6">
         {settingsItems.map(renderMenuItem)}
+      </div>
+
+      {/* جداکننده */}
+      {!collapsedSidebar && (
+        <div className="px-4 mb-4">
+          <div className="h-px bg-gradient-to-r from-transparent via-gray-300 dark:via-gray-700 to-transparent" />
+        </div>
+      )}
+
+      <div className="space-y-1 mb-6">
+        {usersItems.map(renderMenuItem)}
       </div>
 
       {/* جداکننده */}

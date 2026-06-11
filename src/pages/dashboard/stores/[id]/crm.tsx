@@ -1,13 +1,16 @@
 import { DashboardLayout } from '@/components/layouts';
-import { Input } from '@/components/ui';
-import Pagination, {
-  type PaginationMeta,
-} from '@/components/common/Pagination';
 import api from '@/lib/axios';
 import { withAuth } from '@/utils';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useState } from 'react';
+import {
+  Dispatch,
+  FormEvent,
+  SetStateAction,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { toast } from 'sonner';
 
 type Store = {
@@ -19,85 +22,104 @@ type Store = {
   isActive: boolean;
 };
 
-type CrmActivityType =
-  | 'note'
-  | 'email_sent'
-  | 'email_reply'
-  | 'call'
-  | 'meeting'
-  | 'follow_up'
-  | 'status_change';
-
-type CrmOutcome =
-  | 'none'
-  | 'positive'
-  | 'neutral'
-  | 'negative'
-  | 'no_response'
-  | 'interested'
-  | 'not_interested';
-
-type CrmActivity = {
-  _id: string;
-  store: string;
-  type: CrmActivityType;
-  title: string;
-  body: string;
-  emailSent: boolean;
-  emailTo?: string;
-  emailSubject?: string;
-  contactPerson?: string;
-  outcome: CrmOutcome;
-  nextFollowUpAt?: string | null;
-  createdAt: string;
-  updatedAt: string;
+type AppealLevel = {
+  key: string;
+  label: string;
+  score: number;
+  priority: string;
+  outcome: string;
+  nextFollowUpDays: number | null;
+  description: string;
 };
 
-type CrmSummary = {
+type AppealMode = {
+  key: string;
+  label: string;
+  description: string;
+};
+
+type FitSignal = {
+  key: string;
+  label: string;
+  weight: number;
+  description: string;
+};
+
+type RiskSignal = {
+  key: string;
+  label: string;
+  severity: 'low' | 'medium' | 'high';
+  description: string;
+};
+
+type DataQualityLevel = {
+  key: string;
+  label: string;
+  score: number;
+  description: string;
+};
+
+type ContactReadiness = {
+  key: string;
+  label: string;
+  description: string;
+};
+
+type SalesStage = {
+  key: string;
+  label: string;
+  description: string;
+};
+
+type RecommendedAction = {
+  key: string;
+  label: string;
+  description: string;
+};
+
+type SelectedAppeal = {
+  activityId: string;
+
+  appealLevelKey: string;
+  appealLevel: AppealLevel | null;
+
+  appealModeKeys: string[];
+  appealModes: AppealMode[];
+
+  fitSignalKeys: string[];
+  fitSignals: FitSignal[];
+
+  riskSignalKeys: string[];
+  riskSignals: RiskSignal[];
+
+  dataQualityKey: string;
+  dataQuality: DataQualityLevel | null;
+
+  contactReadinessKey: string;
+  contactReadiness: ContactReadiness | null;
+
+  salesStageKey: string;
+  salesStage: SalesStage | null;
+
+  recommendedActionKey: string;
+  recommendedAction: RecommendedAction | null;
+
+  note: string;
+
+  baseScore: number;
+  computedScore: number;
+  priority: string;
+
+  selectedAt: string | null;
+};
+
+type Summary = {
   totalActivities: number;
   hasEmailed: boolean;
   lastActivityAt: string | null;
   lastEmailAt: string | null;
   nextFollowUpAt: string | null;
-};
-
-type StoreCrmAnalysisShape = {
-  crmStatus?: {
-    stage?: string;
-    hasEmailed?: boolean;
-    lastActivityAt?: string | null;
-    lastEmailAt?: string | null;
-    nextFollowUpAt?: string | null;
-    dataQuality?: string;
-  };
-  score?: {
-    priority?: number;
-    confidence?: number;
-    reason?: string;
-  };
-  summary?: {
-    executiveSummary?: string;
-    whatHappened?: string[];
-    importantSignals?: string[];
-    missingInformation?: string[];
-    risks?: string[];
-  };
-  recommendation?: {
-    nextAction?: string;
-    recommendedChannel?: string;
-    recommendedTiming?: string;
-    reason?: string;
-  };
-  outreach?: {
-    subject?: string;
-    body?: string;
-    angle?: string;
-  };
-  crmUpdates?: {
-    suggestedTags?: string[];
-    suggestedOutcome?: string;
-    suggestedNote?: string;
-  };
+  selectedAppeal?: SelectedAppeal | null;
 };
 
 type StoreCrmAnalysisDoc = {
@@ -107,12 +129,12 @@ type StoreCrmAnalysisDoc = {
   storeDomain?: string;
   title?: string;
   crewName?: string;
-  analysis?: StoreCrmAnalysisShape;
-  result?: StoreCrmAnalysisShape;
   status: 'success' | 'failed';
   error?: string;
   generatedAt?: string;
   createdAt: string;
+  analysis?: any;
+  result?: any;
   telegram?: {
     published: boolean;
     channelId: string;
@@ -122,28 +144,10 @@ type StoreCrmAnalysisDoc = {
   };
 };
 
-type FormState = {
-  type: CrmActivityType;
-  title: string;
-  body: string;
-  emailSent: boolean;
-  emailTo: string;
-  emailSubject: string;
-  contactPerson: string;
-  outcome: CrmOutcome;
-  nextFollowUpAt: string;
-};
-
-const defaultFormState: FormState = {
-  type: 'note',
-  title: '',
-  body: '',
-  emailSent: false,
-  emailTo: '',
-  emailSubject: '',
-  contactPerson: '',
-  outcome: 'none',
-  nextFollowUpAt: '',
+type SelectableCardItem = {
+  key: string;
+  label: string;
+  description: string;
 };
 
 function formatDate(value?: string | null) {
@@ -162,44 +166,88 @@ function formatDate(value?: string | null) {
   }).format(date);
 }
 
-function typeLabel(type: CrmActivityType | string) {
+function priorityBadge(priority?: string) {
   const map: Record<string, string> = {
-    note: 'Note',
-    email_sent: 'Email Sent',
-    email_reply: 'Email Reply',
-    call: 'Call',
-    meeting: 'Meeting',
-    follow_up: 'Follow Up',
-    status_change: 'Status Change',
+    urgent: 'badge-error',
+    high: 'badge-warning',
+    normal: 'badge-info',
+    low: 'badge-ghost',
+    blocked: 'badge-neutral',
   };
 
-  return map[type] || type;
+  return map[priority || ''] || 'badge-ghost';
 }
 
-function outcomeLabel(outcome: CrmOutcome | string) {
+function riskBadge(severity?: string) {
   const map: Record<string, string> = {
-    none: 'None',
-    positive: 'Positive',
-    neutral: 'Neutral',
-    negative: 'Negative',
-    no_response: 'No Response',
-    interested: 'Interested',
-    not_interested: 'Not Interested',
+    high: 'badge-error',
+    medium: 'badge-warning',
+    low: 'badge-info',
   };
 
-  return map[outcome] || outcome;
-}
-
-function renderStringList(items?: string[]) {
-  if (!items?.length) {
-    return <li>None recorded.</li>;
-  }
-
-  return items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>);
+  return map[severity || ''] || 'badge-ghost';
 }
 
 function getAnalysisData(doc: StoreCrmAnalysisDoc | null) {
   return doc?.analysis || doc?.result || null;
+}
+
+function SelectableCardGrid<T extends SelectableCardItem>({
+  title,
+  description,
+  items,
+  selectedKeys,
+  onToggle,
+  activeClassName,
+  inactiveHoverClassName,
+  rightBadge,
+  columns = 'lg:grid-cols-4',
+}: {
+  title: string;
+  description: string;
+  items: T[];
+  selectedKeys: string[];
+  onToggle: (key: string) => void;
+  activeClassName: string;
+  inactiveHoverClassName: string;
+  rightBadge?: (item: T) => React.ReactNode;
+  columns?: string;
+}) {
+  return (
+    <div className="mt-8">
+      <h3 className="text-base font-semibold">{title}</h3>
+
+      <p className="mt-1 text-sm text-base-content/70">{description}</p>
+
+      <div className={`mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 ${columns}`}>
+        {items.map((item) => {
+          const active = selectedKeys.includes(item.key);
+
+          return (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => onToggle(item.key)}
+              className={`rounded-xl border p-4 text-left transition ${
+                active
+                  ? activeClassName
+                  : `border-base-300 bg-base-100 ${inactiveHoverClassName}`
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-medium">{item.label}</div>
+                {rightBadge ? rightBadge(item) : null}
+              </div>
+
+              <p className="mt-2 text-sm leading-6 text-base-content/70">
+                {item.description}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export default function StoreCrmPage() {
@@ -211,80 +259,225 @@ export default function StoreCrmPage() {
   }, [router.query.id]);
 
   const [store, setStore] = useState<Store | null>(null);
-  const [summary, setSummary] = useState<CrmSummary | null>(null);
-  const [activities, setActivities] = useState<CrmActivity[]>([]);
-  const [pagination, setPagination] = useState<PaginationMeta | null>(null);
+  const [summary, setSummary] = useState<Summary | null>(null);
+
+  const [appealLevels, setAppealLevels] = useState<AppealLevel[]>([]);
+  const [appealModes, setAppealModes] = useState<AppealMode[]>([]);
+  const [fitSignals, setFitSignals] = useState<FitSignal[]>([]);
+  const [riskSignals, setRiskSignals] = useState<RiskSignal[]>([]);
+  const [dataQualityLevels, setDataQualityLevels] = useState<
+    DataQualityLevel[]
+  >([]);
+  const [contactReadiness, setContactReadiness] = useState<
+    ContactReadiness[]
+  >([]);
+  const [salesStages, setSalesStages] = useState<SalesStage[]>([]);
+  const [recommendedActions, setRecommendedActions] = useState<
+    RecommendedAction[]
+  >([]);
+
+  const [selectedAppeal, setSelectedAppeal] =
+    useState<SelectedAppeal | null>(null);
+
+  const [selectedLevelKey, setSelectedLevelKey] = useState('');
+  const [selectedModeKeys, setSelectedModeKeys] = useState<string[]>([]);
+  const [selectedFitSignalKeys, setSelectedFitSignalKeys] = useState<string[]>(
+    []
+  );
+  const [selectedRiskSignalKeys, setSelectedRiskSignalKeys] = useState<
+    string[]
+  >([]);
+  const [selectedDataQualityKey, setSelectedDataQualityKey] =
+    useState('unknown');
+  const [selectedContactReadinessKey, setSelectedContactReadinessKey] =
+    useState('needs_validation');
+  const [selectedSalesStageKey, setSelectedSalesStageKey] =
+    useState('new_lead');
+  const [selectedRecommendedActionKey, setSelectedRecommendedActionKey] =
+    useState('manual_research');
+  const [note, setNote] = useState('');
+
   const [latestAnalysis, setLatestAnalysis] =
     useState<StoreCrmAnalysisDoc | null>(null);
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  const [analysisRunId, setAnalysisRunId] = useState('');
+  const [analysisRunStatus, setAnalysisRunStatus] = useState('');
+
+  const selectedLevel = useMemo(() => {
+    return appealLevels.find((item) => item.key === selectedLevelKey) || null;
+  }, [appealLevels, selectedLevelKey]);
+
+  const selectedDataQuality = useMemo(() => {
+    return (
+      dataQualityLevels.find((item) => item.key === selectedDataQualityKey) ||
+      null
+    );
+  }, [dataQualityLevels, selectedDataQualityKey]);
+
+  const selectedContactReadiness = useMemo(() => {
+    return (
+      contactReadiness.find(
+        (item) => item.key === selectedContactReadinessKey
+      ) || null
+    );
+  }, [contactReadiness, selectedContactReadinessKey]);
+
+  const selectedSalesStage = useMemo(() => {
+    return (
+      salesStages.find((item) => item.key === selectedSalesStageKey) || null
+    );
+  }, [salesStages, selectedSalesStageKey]);
+
+  const selectedRecommendedAction = useMemo(() => {
+    return (
+      recommendedActions.find(
+        (item) => item.key === selectedRecommendedActionKey
+      ) || null
+    );
+  }, [recommendedActions, selectedRecommendedActionKey]);
 
   const analysisData = useMemo(() => {
     return getAnalysisData(latestAnalysis);
   }, [latestAnalysis]);
 
-  const [form, setForm] = useState<FormState>(defaultFormState);
+  const computedPreviewScore = useMemo(() => {
+    if (!selectedLevel) return 0;
 
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
-  const [emailFilter, setEmailFilter] = useState('');
+    const selectedFitSignals = fitSignals.filter((item) =>
+      selectedFitSignalKeys.includes(item.key)
+    );
 
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(20);
+    const selectedRisks = riskSignals.filter((item) =>
+      selectedRiskSignalKeys.includes(item.key)
+    );
 
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [deletingId, setDeletingId] = useState('');
+    const fitBonus = selectedFitSignals.reduce((sum, item) => {
+      return sum + Number(item.weight || 0);
+    }, 0);
 
-  const [analysisRunId, setAnalysisRunId] = useState('');
-  const [analysisRunStatus, setAnalysisRunStatus] = useState('');
+    const riskPenalty = selectedRisks.reduce((sum, item) => {
+      if (item.severity === 'high') return sum + 20;
+      if (item.severity === 'medium') return sum + 10;
+      return sum + 5;
+    }, 0);
 
-  const fetchCrmActivities = async (
-    nextPage = page,
-    nextLimit = limit,
-    nextSearch = search,
-    nextType = typeFilter,
-    nextEmailFilter = emailFilter
+    const dataQualityAdjustment = Math.round(
+      (Number(selectedDataQuality?.score || 0) - 50) * 0.2
+    );
+
+    const finalScore =
+      selectedLevel.score + fitBonus * 0.25 - riskPenalty + dataQualityAdjustment;
+
+    return Math.max(0, Math.min(100, Math.round(finalScore)));
+  }, [
+    selectedLevel,
+    fitSignals,
+    riskSignals,
+    selectedFitSignalKeys,
+    selectedRiskSignalKeys,
+    selectedDataQuality,
+  ]);
+
+  const toggleKey = (
+    key: string,
+    setter: Dispatch<SetStateAction<string[]>>
   ) => {
+    setter((current) => {
+      if (current.includes(key)) {
+        return current.filter((item) => item !== key);
+      }
+
+      return [...current, key];
+    });
+  };
+
+  const hydrateSelection = (nextSelectedAppeal: SelectedAppeal | null) => {
+    if (!nextSelectedAppeal) {
+      return;
+    }
+
+    setSelectedLevelKey(nextSelectedAppeal.appealLevelKey || '');
+    setSelectedModeKeys(nextSelectedAppeal.appealModeKeys || []);
+    setSelectedFitSignalKeys(nextSelectedAppeal.fitSignalKeys || []);
+    setSelectedRiskSignalKeys(nextSelectedAppeal.riskSignalKeys || []);
+    setSelectedDataQualityKey(
+      nextSelectedAppeal.dataQualityKey || 'unknown'
+    );
+    setSelectedContactReadinessKey(
+      nextSelectedAppeal.contactReadinessKey || 'needs_validation'
+    );
+    setSelectedSalesStageKey(nextSelectedAppeal.salesStageKey || 'new_lead');
+    setSelectedRecommendedActionKey(
+      nextSelectedAppeal.recommendedActionKey || 'manual_research'
+    );
+    setNote(nextSelectedAppeal.note || '');
+  };
+
+  const fetchPage = async () => {
     if (!storeId) return;
 
     try {
-      setIsRefreshing(true);
+      setIsLoading(true);
 
       const response = await api.get(`/stores/${storeId}/crm-activities`, {
         params: {
-          page: nextPage,
-          limit: nextLimit,
-          ...(nextSearch ? { q: nextSearch } : {}),
-          ...(nextType ? { type: nextType } : {}),
-          ...(nextEmailFilter !== ''
-            ? { emailSent: nextEmailFilter === 'true' }
-            : {}),
+          page: 1,
+          limit: 20,
         },
       });
 
-      setStore(response?.data?.data?.store || null);
-      setSummary(response?.data?.data?.summary || null);
-      setActivities(response?.data?.data?.activities || []);
-      setPagination(response?.data?.data?.pagination || null);
-      setLatestAnalysis(response?.data?.data?.latestAnalysis || null);
+      const data = response?.data?.data || {};
+
+      setStore(data.store || null);
+      setSummary(data.summary || null);
+
+      setAppealLevels(data.appealLevels || []);
+      setAppealModes(data.appealModes || []);
+      setFitSignals(data.fitSignals || []);
+      setRiskSignals(data.riskSignals || []);
+      setDataQualityLevels(data.dataQualityLevels || []);
+      setContactReadiness(data.contactReadiness || []);
+      setSalesStages(data.salesStages || []);
+      setRecommendedActions(data.recommendedActions || []);
+
+      setSelectedAppeal(data.selectedAppeal || null);
+      setLatestAnalysis(data.latestAnalysis || null);
+
+      if (data.selectedAppeal) {
+        hydrateSelection(data.selectedAppeal);
+      } else {
+        const levels = data.appealLevels || [];
+        const dataQuality = data.dataQualityLevels || [];
+        const contacts = data.contactReadiness || [];
+        const stages = data.salesStages || [];
+        const actions = data.recommendedActions || [];
+
+        setSelectedLevelKey(levels[2]?.key || levels[0]?.key || '');
+        setSelectedDataQualityKey(dataQuality[4]?.key || 'unknown');
+        setSelectedContactReadinessKey(contacts[3]?.key || 'needs_validation');
+        setSelectedSalesStageKey(stages[0]?.key || 'new_lead');
+        setSelectedRecommendedActionKey(actions[1]?.key || 'manual_research');
+      }
     } catch (error: any) {
       const message =
         error?.response?.data?.error ||
         error?.response?.data?.message ||
-        'Failed to load CRM activities.';
+        'Failed to load store appeal data.';
 
       toast.error(message);
     } finally {
       setIsLoading(false);
-      setIsRefreshing(false);
     }
   };
 
   useEffect(() => {
     if (!storeId) return;
 
-    fetchCrmActivities(1, limit);
+    fetchPage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
 
@@ -305,10 +498,10 @@ export default function StoreCrmPage() {
 
           toast.success('CRM analysis completed.');
 
-          await fetchCrmActivities(page, limit);
-
           setAnalysisRunId('');
           setAnalysisRunStatus('');
+
+          await fetchPage();
         }
 
         if (run.status === 'failed') {
@@ -328,110 +521,62 @@ export default function StoreCrmPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisRunId]);
 
-  const updateForm = <K extends keyof FormState>(
-    key: K,
-    value: FormState[K]
-  ) => {
-    setForm((current) => {
-      const next = {
-        ...current,
-        [key]: value,
-      };
-
-      if (key === 'type' && value === 'email_sent') {
-        next.emailSent = true;
-      }
-
-      return next;
-    });
-  };
-
-  const resetForm = () => {
-    setForm(defaultFormState);
-  };
-
-  const handleSubmitActivity = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveAppeal = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
 
     if (!storeId) return;
 
-    if (!form.title.trim() && !form.body.trim()) {
-      toast.error('Title or note body is required.');
+    if (!selectedLevelKey) {
+      toast.error('Select a store appeal level.');
       return;
     }
 
     try {
-      setIsSubmitting(true);
+      setIsSaving(true);
 
-      const payload = {
-        ...form,
-        nextFollowUpAt: form.nextFollowUpAt || null,
-      };
-
-      const response = await api.post(
-        `/stores/${storeId}/crm-activities`,
-        payload
-      );
+      const response = await api.post(`/stores/${storeId}/crm-activities`, {
+        appealLevelKey: selectedLevelKey,
+        appealModeKeys: selectedModeKeys,
+        fitSignalKeys: selectedFitSignalKeys,
+        riskSignalKeys: selectedRiskSignalKeys,
+        dataQualityKey: selectedDataQualityKey,
+        contactReadinessKey: selectedContactReadinessKey,
+        salesStageKey: selectedSalesStageKey,
+        recommendedActionKey: selectedRecommendedActionKey,
+        note,
+      });
 
       toast.success(
-        response?.data?.message || 'CRM activity added successfully.'
+        response?.data?.message || 'Store appeal classification saved.'
       );
 
-      resetForm();
-      setPage(1);
+      const nextSelectedAppeal = response?.data?.data?.selectedAppeal || null;
 
-      await fetchCrmActivities(1, limit);
+      if (nextSelectedAppeal) {
+        setSelectedAppeal(nextSelectedAppeal);
+        hydrateSelection(nextSelectedAppeal);
+      }
+
+      await fetchPage();
     } catch (error: any) {
       const message =
         error?.response?.data?.error ||
         error?.response?.data?.message ||
-        'Failed to add CRM activity.';
+        'Failed to save store appeal classification.';
 
       toast.error(message);
     } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleDeleteActivity = async (activity: CrmActivity) => {
-    const confirmed = window.confirm('Delete this CRM activity?');
-
-    if (!confirmed) return;
-
-    try {
-      setDeletingId(activity._id);
-
-      const response = await api.delete(
-        `/stores/${storeId}/crm-activities/${activity._id}`
-      );
-
-      toast.success(response?.data?.message || 'CRM activity deleted.');
-
-      const nextPage = activities.length === 1 && page > 1 ? page - 1 : page;
-
-      setPage(nextPage);
-
-      await fetchCrmActivities(nextPage, limit);
-    } catch (error: any) {
-      const message =
-        error?.response?.data?.error ||
-        error?.response?.data?.message ||
-        'Failed to delete CRM activity.';
-
-      toast.error(message);
-    } finally {
-      setDeletingId('');
+      setIsSaving(false);
     }
   };
 
   const handleAnalyzeCrm = async () => {
     if (!storeId) return;
 
-    const confirmed = window.confirm(
-      'Run AI CRM analysis for this store? The task will run in the background. You can stay on this page.'
-    );
-
-    if (!confirmed) return;
+    if (!selectedLevelKey) {
+      toast.error('Select store appeal before running analysis.');
+      return;
+    }
 
     try {
       setIsAnalyzing(true);
@@ -451,8 +596,6 @@ export default function StoreCrmPage() {
       toast.success(
         response?.data?.message || 'CRM analysis started in background.'
       );
-
-      await fetchCrmActivities(page, limit);
     } catch (error: any) {
       const message =
         error?.response?.data?.error ||
@@ -465,57 +608,27 @@ export default function StoreCrmPage() {
     }
   };
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    setPage(1);
-    await fetchCrmActivities(1, limit);
-  };
-
-  const handleResetFilters = async () => {
-    setSearch('');
-    setTypeFilter('');
-    setEmailFilter('');
-    setPage(1);
-
-    await fetchCrmActivities(1, limit, '', '', '');
-  };
-
-  const handlePageChange = async (nextPage: number) => {
-    setPage(nextPage);
-    await fetchCrmActivities(nextPage, limit);
-  };
-
-  const handleLimitChange = async (nextLimit: number) => {
-    setLimit(nextLimit);
-    setPage(1);
-
-    await fetchCrmActivities(1, nextLimit);
-  };
-
   return (
     <DashboardLayout>
       <div className="py-8" dir="ltr">
         <div className="mx-auto max-w-7xl space-y-6">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="mb-2">
-                <Link
-                  href="/dashboard/stores"
-                  className="text-sm text-primary hover:underline"
-                >
-                  ← Back to Stores
-                </Link>
-              </div>
+          <div>
+            <Link
+              href="/dashboard/stores"
+              className="text-sm text-primary hover:underline"
+            >
+              ← Back to Stores
+            </Link>
 
-              <h1 className="text-2xl font-semibold text-base-content">
-                Store CRM
-              </h1>
+            <h1 className="mt-3 text-2xl font-semibold text-base-content">
+              Store Appeal Analysis
+            </h1>
 
-              <p className="mt-1 text-sm text-base-content/70">
-                Notes, emails, calls, meetings, follow-ups and AI CRM analysis.
-              </p>
-            </div>
+            <p className="mt-1 text-sm text-base-content/70">
+              Classify each store by appeal level, fit signals, risk signals,
+              data quality, contact readiness, sales stage and recommended next
+              action.
+            </p>
           </div>
 
           {isLoading ? (
@@ -538,7 +651,7 @@ export default function StoreCrmPage() {
                     {store.domain}
                   </div>
 
-                  <div className="mt-3">
+                  <div className="mt-3 flex flex-wrap gap-2">
                     {store.isActive ? (
                       <span className="badge badge-success badge-outline">
                         Active
@@ -546,24 +659,34 @@ export default function StoreCrmPage() {
                     ) : (
                       <span className="badge badge-ghost">Inactive</span>
                     )}
+
+                    {selectedAppeal ? (
+                      <span
+                        className={`badge ${priorityBadge(
+                          selectedAppeal.priority
+                        )}`}
+                      >
+                        {selectedAppeal.appealLevel?.label || 'Selected'}
+                      </span>
+                    ) : (
+                      <span className="badge badge-warning">
+                        Appeal not selected
+                      </span>
+                    )}
                   </div>
                 </div>
 
                 <div className="rounded-2xl border border-base-300 bg-base-100 p-5 shadow-sm">
                   <div className="text-sm text-base-content/60">
-                    Email Status
+                    Preview Score
                   </div>
 
-                  <div className="mt-2">
-                    {summary?.hasEmailed ? (
-                      <span className="badge badge-success">Emailed</span>
-                    ) : (
-                      <span className="badge badge-warning">Not emailed</span>
-                    )}
+                  <div className="mt-2 text-3xl font-semibold">
+                    {computedPreviewScore || '-'}
                   </div>
 
-                  <div className="mt-3 text-xs text-base-content/60">
-                    Last email: {formatDate(summary?.lastEmailAt)}
+                  <div className="mt-1 text-xs text-base-content/60">
+                    Calculated from selected fields
                   </div>
                 </div>
 
@@ -576,11 +699,291 @@ export default function StoreCrmPage() {
                     {formatDate(summary?.nextFollowUpAt)}
                   </div>
 
-                  <div className="mt-3 text-xs text-base-content/60">
-                    Activities: {summary?.totalActivities || 0}
+                  <div className="mt-1 text-xs text-base-content/60">
+                    Selected: {formatDate(selectedAppeal?.selectedAt)}
                   </div>
                 </div>
               </div>
+
+              <form
+                onSubmit={handleSaveAppeal}
+                className="rounded-2xl border border-base-300 bg-base-100 p-6 shadow-sm"
+              >
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold">
+                      Store Appeal Classification
+                    </h2>
+
+                    <p className="mt-1 text-sm text-base-content/70">
+                      Select structured default items. These become CRM analysis
+                      data for this store.
+                    </p>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className={`btn btn-primary ${
+                      isSaving ? 'btn-disabled' : ''
+                    }`}
+                  >
+                    {isSaving ? 'Saving...' : 'Save Classification'}
+                  </button>
+                </div>
+
+                <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-7">
+                  {appealLevels.map((level) => {
+                    const active = selectedLevelKey === level.key;
+
+                    return (
+                      <button
+                        key={level.key}
+                        type="button"
+                        onClick={() => setSelectedLevelKey(level.key)}
+                        className={`rounded-2xl border p-4 text-left transition ${
+                          active
+                            ? 'border-primary bg-primary/10 ring-2 ring-primary/20'
+                            : 'border-base-300 bg-base-100 hover:border-primary/60'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="font-semibold">{level.label}</div>
+
+                          <span
+                            className={`badge ${priorityBadge(
+                              level.priority
+                            )}`}
+                          >
+                            {level.score}
+                          </span>
+                        </div>
+
+                        <div className="mt-2 text-xs uppercase tracking-wide text-base-content/50">
+                          {level.priority}
+                        </div>
+
+                        <p className="mt-3 text-sm leading-6 text-base-content/70">
+                          {level.description}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <SelectableCardGrid
+                  title="Appeal Modes"
+                  description="Select the general modes that describe why this store may matter."
+                  items={appealModes}
+                  selectedKeys={selectedModeKeys}
+                  onToggle={(key) => toggleKey(key, setSelectedModeKeys)}
+                  activeClassName="border-secondary bg-secondary/10 ring-2 ring-secondary/20"
+                  inactiveHoverClassName="hover:border-secondary/60"
+                  rightBadge={(item) =>
+                    selectedModeKeys.includes(item.key) ? (
+                      <span className="badge badge-secondary">Selected</span>
+                    ) : null
+                  }
+                  columns="lg:grid-cols-4"
+                />
+
+                <SelectableCardGrid
+                  title="Fit Signals"
+                  description="Select positive signals that increase the store’s appeal."
+                  items={fitSignals}
+                  selectedKeys={selectedFitSignalKeys}
+                  onToggle={(key) => toggleKey(key, setSelectedFitSignalKeys)}
+                  activeClassName="border-success bg-success/10 ring-2 ring-success/20"
+                  inactiveHoverClassName="hover:border-success/60"
+                  rightBadge={(item) => (
+                    <span className="badge badge-success badge-outline">
+                      +{(item as FitSignal).weight}
+                    </span>
+                  )}
+                  columns="lg:grid-cols-5"
+                />
+
+                <SelectableCardGrid
+                  title="Risk Signals"
+                  description="Select negative signals that reduce the store’s appeal."
+                  items={riskSignals}
+                  selectedKeys={selectedRiskSignalKeys}
+                  onToggle={(key) => toggleKey(key, setSelectedRiskSignalKeys)}
+                  activeClassName="border-error bg-error/10 ring-2 ring-error/20"
+                  inactiveHoverClassName="hover:border-error/60"
+                  rightBadge={(item) => (
+                    <span
+                      className={`badge ${riskBadge(
+                        (item as RiskSignal).severity
+                      )} badge-outline`}
+                    >
+                      {(item as RiskSignal).severity}
+                    </span>
+                  )}
+                  columns="lg:grid-cols-5"
+                />
+
+                <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                  <div className="form-control">
+                    <label className="label">
+                      <span className="label-text">Data Quality</span>
+                    </label>
+
+                    <select
+                      className="select select-bordered"
+                      value={selectedDataQualityKey}
+                      onChange={(event) =>
+                        setSelectedDataQualityKey(event.target.value)
+                      }
+                    >
+                      {dataQualityLevels.map((item) => (
+                        <option key={item.key} value={item.key}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    {selectedDataQuality && (
+                      <div className="mt-2 text-xs leading-5 text-base-content/60">
+                        {selectedDataQuality.description}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="form-control">
+                    <label className="label">
+                      <span className="label-text">Contact Readiness</span>
+                    </label>
+
+                    <select
+                      className="select select-bordered"
+                      value={selectedContactReadinessKey}
+                      onChange={(event) =>
+                        setSelectedContactReadinessKey(event.target.value)
+                      }
+                    >
+                      {contactReadiness.map((item) => (
+                        <option key={item.key} value={item.key}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    {selectedContactReadiness && (
+                      <div className="mt-2 text-xs leading-5 text-base-content/60">
+                        {selectedContactReadiness.description}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="form-control">
+                    <label className="label">
+                      <span className="label-text">Sales Stage</span>
+                    </label>
+
+                    <select
+                      className="select select-bordered"
+                      value={selectedSalesStageKey}
+                      onChange={(event) =>
+                        setSelectedSalesStageKey(event.target.value)
+                      }
+                    >
+                      {salesStages.map((item) => (
+                        <option key={item.key} value={item.key}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    {selectedSalesStage && (
+                      <div className="mt-2 text-xs leading-5 text-base-content/60">
+                        {selectedSalesStage.description}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="form-control">
+                    <label className="label">
+                      <span className="label-text">Recommended Action</span>
+                    </label>
+
+                    <select
+                      className="select select-bordered"
+                      value={selectedRecommendedActionKey}
+                      onChange={(event) =>
+                        setSelectedRecommendedActionKey(event.target.value)
+                      }
+                    >
+                      {recommendedActions.map((item) => (
+                        <option key={item.key} value={item.key}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    {selectedRecommendedAction && (
+                      <div className="mt-2 text-xs leading-5 text-base-content/60">
+                        {selectedRecommendedAction.description}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-8 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <div className="rounded-2xl border border-base-300 bg-base-200/30 p-5">
+                    <div className="text-sm text-base-content/60">
+                      Base Score
+                    </div>
+                    <div className="mt-2 text-3xl font-semibold">
+                      {selectedLevel?.score || '-'}
+                    </div>
+                    <div className="mt-1 text-xs text-base-content/60">
+                      From appeal level
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-base-300 bg-base-200/30 p-5">
+                    <div className="text-sm text-base-content/60">
+                      Computed Score
+                    </div>
+                    <div className="mt-2 text-3xl font-semibold">
+                      {computedPreviewScore || '-'}
+                    </div>
+                    <div className="mt-1 text-xs text-base-content/60">
+                      Level + fit signals - risk signals + data quality
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-base-300 bg-base-200/30 p-5">
+                    <div className="text-sm text-base-content/60">
+                      Selected Dimensions
+                    </div>
+                    <div className="mt-2 text-3xl font-semibold">
+                      {selectedModeKeys.length +
+                        selectedFitSignalKeys.length +
+                        selectedRiskSignalKeys.length +
+                        4}
+                    </div>
+                    <div className="mt-1 text-xs text-base-content/60">
+                      Number of active structured data points
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-8">
+                  <label className="label">
+                    <span className="label-text">Optional note</span>
+                  </label>
+
+                  <textarea
+                    className="textarea textarea-bordered min-h-[120px] w-full"
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
+                    placeholder="Optional explanation for this appeal classification..."
+                    dir="ltr"
+                  />
+                </div>
+              </form>
 
               <div className="rounded-2xl border border-base-300 bg-base-100 p-6 shadow-sm">
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -588,20 +991,23 @@ export default function StoreCrmPage() {
                     <h2 className="text-lg font-semibold">AI CRM Analysis</h2>
 
                     <p className="mt-1 text-sm text-base-content/70">
-                      Analyze this store’s CRM notes, email history, follow-ups
-                      and sales state. The task runs in the background while you
-                      stay on this page.
+                      Analysis will include the selected appeal level, modes,
+                      fit signals, risks, data quality, contact readiness, sales
+                      stage and recommended next action.
                     </p>
                   </div>
 
                   <button
                     type="button"
+                    disabled={isAnalyzing || Boolean(analysisRunId)}
                     className={`btn btn-primary ${
                       isAnalyzing || analysisRunId ? 'btn-disabled' : ''
                     }`}
                     onClick={handleAnalyzeCrm}
                   >
-                    {isAnalyzing || analysisRunId ? 'Running...' : 'Analyze CRM'}
+                    {isAnalyzing || analysisRunId
+                      ? 'Running...'
+                      : 'Analyze CRM'}
                   </button>
                 </div>
 
@@ -611,18 +1017,18 @@ export default function StoreCrmPage() {
                       <span className="loading loading-spinner loading-sm" />
                       <span>
                         {analysisRunId
-                          ? `CRM analysis is running in background. Status: ${
+                          ? `CRM analysis is running. Status: ${
                               analysisRunStatus || 'queued'
                             }`
-                          : 'Starting background CRM analysis...'}
+                          : 'Starting CRM analysis...'}
                       </span>
                     </div>
 
-                    {analysisRunId ? (
+                    {analysisRunId && (
                       <div className="mt-2 break-all font-mono text-xs text-base-content/50">
                         Run ID: {analysisRunId}
                       </div>
-                    ) : null}
+                    )}
                   </div>
                 )}
 
@@ -631,15 +1037,13 @@ export default function StoreCrmPage() {
                     No CRM analysis saved yet.
                   </div>
                 ) : !analysisData ? (
-                  <div className="mt-5 rounded-xl border border-warning/30 bg-warning/5 p-5 text-sm text-base-content/80">
-                    <div className="font-semibold">Analysis saved, but its structure is not readable by this page.</div>
-                    <pre className="mt-3 max-h-[320px] overflow-auto rounded-lg bg-base-200 p-4 text-xs">
-                      {JSON.stringify(latestAnalysis, null, 2)}
-                    </pre>
+                  <div className="mt-5 rounded-xl border border-warning/30 bg-warning/5 p-5 text-sm">
+                    Analysis exists, but its structure is not readable by this
+                    page.
                   </div>
                 ) : (
                   <div className="mt-5 space-y-5">
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                       <div className="rounded-xl bg-base-200/50 p-4">
                         <div className="text-xs text-base-content/60">
                           Stage
@@ -660,26 +1064,12 @@ export default function StoreCrmPage() {
 
                       <div className="rounded-xl bg-base-200/50 p-4">
                         <div className="text-xs text-base-content/60">
-                          Confidence
+                          Generated
                         </div>
                         <div className="mt-1 font-semibold">
-                          {analysisData.score?.confidence ?? '-'} / 100
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl bg-base-200/50 p-4">
-                        <div className="text-xs text-base-content/60">
-                          Telegram
-                        </div>
-                        <div className="mt-1">
-                          {latestAnalysis.telegram?.published ? (
-                            <span className="badge badge-success">
-                              Published
-                            </span>
-                          ) : (
-                            <span className="badge badge-warning">
-                              Not published
-                            </span>
+                          {formatDate(
+                            latestAnalysis.generatedAt ||
+                              latestAnalysis.createdAt
                           )}
                         </div>
                       </div>
@@ -687,16 +1077,17 @@ export default function StoreCrmPage() {
 
                     <div>
                       <h3 className="font-semibold">Executive Summary</h3>
+
                       <p className="mt-2 text-sm leading-6 text-base-content/80">
                         {analysisData.summary?.executiveSummary || '-'}
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-                      <div>
+                    {analysisData.recommendation && (
+                      <div className="rounded-xl border border-base-300 p-4 text-sm">
                         <h3 className="font-semibold">Recommendation</h3>
 
-                        <div className="mt-2 rounded-xl border border-base-300 p-4 text-sm">
+                        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
                           <div>
                             <span className="text-base-content/60">
                               Next action:
@@ -704,7 +1095,7 @@ export default function StoreCrmPage() {
                             {analysisData.recommendation?.nextAction || '-'}
                           </div>
 
-                          <div className="mt-1">
+                          <div>
                             <span className="text-base-content/60">
                               Channel:
                             </span>{' '}
@@ -712,463 +1103,24 @@ export default function StoreCrmPage() {
                               ?.recommendedChannel || '-'}
                           </div>
 
-                          <div className="mt-1">
+                          <div>
                             <span className="text-base-content/60">
                               Timing:
                             </span>{' '}
                             {analysisData.recommendation
                               ?.recommendedTiming || '-'}
                           </div>
-
-                          <p className="mt-3 text-base-content/80">
-                            {analysisData.recommendation?.reason || ''}
-                          </p>
                         </div>
-                      </div>
 
-                      <div>
-                        <h3 className="font-semibold">Suggested Outreach</h3>
-
-                        <div className="mt-2 rounded-xl border border-base-300 p-4 text-sm">
-                          <div>
-                            <span className="text-base-content/60">
-                              Subject:
-                            </span>{' '}
-                            {analysisData.outreach?.subject || '-'}
-                          </div>
-
-                          <div className="mt-1">
-                            <span className="text-base-content/60">
-                              Angle:
-                            </span>{' '}
-                            {analysisData.outreach?.angle || '-'}
-                          </div>
-
-                          <p className="mt-3 whitespace-pre-wrap text-base-content/80">
-                            {analysisData.outreach?.body || ''}
+                        {analysisData.recommendation?.reason && (
+                          <p className="mt-3 leading-6 text-base-content/80">
+                            {analysisData.recommendation.reason}
                           </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-                      <div>
-                        <h3 className="font-semibold">Important Signals</h3>
-                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-base-content/80">
-                          {renderStringList(
-                            analysisData.summary?.importantSignals
-                          )}
-                        </ul>
-                      </div>
-
-                      <div>
-                        <h3 className="font-semibold">Missing Information</h3>
-                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-base-content/80">
-                          {renderStringList(
-                            analysisData.summary?.missingInformation
-                          )}
-                        </ul>
-                      </div>
-
-                      <div>
-                        <h3 className="font-semibold">Risks</h3>
-                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-base-content/80">
-                          {renderStringList(analysisData.summary?.risks)}
-                        </ul>
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl bg-base-200/50 p-4 text-sm">
-                      <div>
-                        <span className="text-base-content/60">
-                          Generated:
-                        </span>{' '}
-                        {formatDate(
-                          latestAnalysis.generatedAt ||
-                            latestAnalysis.createdAt
                         )}
                       </div>
-
-                      {latestAnalysis.telegram?.publishedAt && (
-                        <div className="mt-1">
-                          <span className="text-base-content/60">
-                            Telegram published:
-                          </span>{' '}
-                          {formatDate(latestAnalysis.telegram.publishedAt)}
-                        </div>
-                      )}
-
-                      {latestAnalysis.telegram?.error && (
-                        <div className="mt-1 text-error">
-                          Telegram error: {latestAnalysis.telegram.error}
-                        </div>
-                      )}
-
-                      {analysisData.score?.reason && (
-                        <div className="mt-3">
-                          <span className="text-base-content/60">
-                            Score reason:
-                          </span>{' '}
-                          {analysisData.score.reason}
-                        </div>
-                      )}
-
-                      {analysisData.crmUpdates?.suggestedNote && (
-                        <div className="mt-3">
-                          <span className="text-base-content/60">
-                            Suggested CRM note:
-                          </span>{' '}
-                          {analysisData.crmUpdates.suggestedNote}
-                        </div>
-                      )}
-                    </div>
+                    )}
                   </div>
                 )}
-              </div>
-
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                <div className="rounded-2xl border border-base-300 bg-base-100 p-6 shadow-sm lg:col-span-1">
-                  <h2 className="text-lg font-semibold">Add CRM Activity</h2>
-
-                  <form
-                    onSubmit={handleSubmitActivity}
-                    className="mt-5 space-y-4"
-                  >
-                    <div className="form-control">
-                      <label className="label">
-                        <span className="label-text">Type</span>
-                      </label>
-
-                      <select
-                        className="select select-bordered w-full"
-                        value={form.type}
-                        onChange={(e) =>
-                          updateForm('type', e.target.value as CrmActivityType)
-                        }
-                      >
-                        <option value="note">Note</option>
-                        <option value="email_sent">Email Sent</option>
-                        <option value="email_reply">Email Reply</option>
-                        <option value="call">Call</option>
-                        <option value="meeting">Meeting</option>
-                        <option value="follow_up">Follow Up</option>
-                        <option value="status_change">Status Change</option>
-                      </select>
-                    </div>
-
-                    <Input
-                      value={form.title}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        updateForm('title', e.target.value)
-                      }
-                      type="text"
-                      label="Title"
-                      placeholder="Example: First outreach email sent"
-                      dir="ltr"
-                    />
-
-                    <div className="form-control">
-                      <label className="label">
-                        <span className="label-text">Note</span>
-                      </label>
-
-                      <textarea
-                        className="textarea textarea-bordered min-h-[120px]"
-                        value={form.body}
-                        onChange={(e) => updateForm('body', e.target.value)}
-                        placeholder="Write CRM note..."
-                        dir="ltr"
-                      />
-                    </div>
-
-                    <Input
-                      value={form.contactPerson}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        updateForm('contactPerson', e.target.value)
-                      }
-                      type="text"
-                      label="Contact Person"
-                      placeholder="John Doe"
-                      dir="ltr"
-                    />
-
-                    <Input
-                      value={form.emailTo}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        updateForm('emailTo', e.target.value)
-                      }
-                      type="email"
-                      label="Email To"
-                      placeholder="team@example.com"
-                      dir="ltr"
-                    />
-
-                    <Input
-                      value={form.emailSubject}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        updateForm('emailSubject', e.target.value)
-                      }
-                      type="text"
-                      label="Email Subject"
-                      placeholder="Partnership opportunity"
-                      dir="ltr"
-                    />
-
-                    <div className="form-control">
-                      <label className="label">
-                        <span className="label-text">Outcome</span>
-                      </label>
-
-                      <select
-                        className="select select-bordered w-full"
-                        value={form.outcome}
-                        onChange={(e) =>
-                          updateForm('outcome', e.target.value as CrmOutcome)
-                        }
-                      >
-                        <option value="none">None</option>
-                        <option value="positive">Positive</option>
-                        <option value="neutral">Neutral</option>
-                        <option value="negative">Negative</option>
-                        <option value="no_response">No Response</option>
-                        <option value="interested">Interested</option>
-                        <option value="not_interested">Not Interested</option>
-                      </select>
-                    </div>
-
-                    <Input
-                      value={form.nextFollowUpAt}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        updateForm('nextFollowUpAt', e.target.value)
-                      }
-                      type="datetime-local"
-                      label="Next Follow-up"
-                      dir="ltr"
-                    />
-
-                    <div className="form-control">
-                      <label className="label cursor-pointer justify-start gap-3">
-                        <input
-                          type="checkbox"
-                          className="checkbox checkbox-primary"
-                          checked={form.emailSent}
-                          onChange={(e) =>
-                            updateForm('emailSent', e.target.checked)
-                          }
-                        />
-                        <span className="label-text">
-                          Mark as emailed store
-                        </span>
-                      </label>
-                    </div>
-
-                    <button
-                      type="submit"
-                      className={`btn btn-primary w-full ${
-                        isSubmitting ? 'btn-disabled' : ''
-                      }`}
-                    >
-                      {isSubmitting ? 'Saving...' : 'Save CRM Activity'}
-                    </button>
-                  </form>
-                </div>
-
-                <div className="rounded-2xl border border-base-300 bg-base-100 shadow-sm lg:col-span-2">
-                  <div className="border-b border-base-300 p-6">
-                    <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                      <div>
-                        <h2 className="text-lg font-semibold">CRM Timeline</h2>
-                        <p className="mt-1 text-sm text-base-content/70">
-                          Complete activity history for this store.
-                        </p>
-                      </div>
-
-                      {isRefreshing && (
-                        <span className="loading loading-spinner loading-sm" />
-                      )}
-                    </div>
-
-                    <form
-                      onSubmit={handleSearch}
-                      className="grid grid-cols-1 gap-3 md:grid-cols-4"
-                    >
-                      <div className="md:col-span-2">
-                        <Input
-                          value={search}
-                          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                            setSearch(e.target.value)
-                          }
-                          type="text"
-                          label="Search"
-                          placeholder="Search notes, subject, contact..."
-                          dir="ltr"
-                        />
-                      </div>
-
-                      <div className="form-control">
-                        <label className="label">
-                          <span className="label-text">Type</span>
-                        </label>
-
-                        <select
-                          className="select select-bordered"
-                          value={typeFilter}
-                          onChange={(e) => setTypeFilter(e.target.value)}
-                        >
-                          <option value="">All</option>
-                          <option value="note">Note</option>
-                          <option value="email_sent">Email Sent</option>
-                          <option value="email_reply">Email Reply</option>
-                          <option value="call">Call</option>
-                          <option value="meeting">Meeting</option>
-                          <option value="follow_up">Follow Up</option>
-                          <option value="status_change">Status Change</option>
-                        </select>
-                      </div>
-
-                      <div className="form-control">
-                        <label className="label">
-                          <span className="label-text">Email</span>
-                        </label>
-
-                        <select
-                          className="select select-bordered"
-                          value={emailFilter}
-                          onChange={(e) => setEmailFilter(e.target.value)}
-                        >
-                          <option value="">All</option>
-                          <option value="true">Emailed</option>
-                          <option value="false">Not emailed</option>
-                        </select>
-                      </div>
-
-                      <div className="flex justify-end gap-2 md:col-span-4">
-                        <button type="submit" className="btn btn-outline">
-                          Search
-                        </button>
-
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          onClick={handleResetFilters}
-                        >
-                          Reset
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-
-                  {activities.length === 0 ? (
-                    <div className="p-10 text-center">
-                      <h3 className="text-lg font-medium">
-                        No CRM activities yet
-                      </h3>
-
-                      <p className="mt-2 text-sm text-base-content/70">
-                        Add the first note, email, call, meeting or follow-up.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-base-300">
-                      {activities.map((activity) => (
-                        <div key={activity._id} className="p-6">
-                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                            <div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="badge badge-outline">
-                                  {typeLabel(activity.type)}
-                                </span>
-
-                                {activity.emailSent && (
-                                  <span className="badge badge-success">
-                                    Emailed
-                                  </span>
-                                )}
-
-                                {activity.outcome !== 'none' && (
-                                  <span className="badge badge-neutral">
-                                    {outcomeLabel(activity.outcome)}
-                                  </span>
-                                )}
-                              </div>
-
-                              <h3 className="mt-3 text-lg font-semibold">
-                                {activity.title || typeLabel(activity.type)}
-                              </h3>
-
-                              <div className="mt-1 text-xs text-base-content/60">
-                                Created: {formatDate(activity.createdAt)}
-                              </div>
-                            </div>
-
-                            <button
-                              type="button"
-                              className={`btn btn-sm btn-error btn-outline ${
-                                deletingId === activity._id ? 'btn-disabled' : ''
-                              }`}
-                              onClick={() => handleDeleteActivity(activity)}
-                            >
-                              {deletingId === activity._id
-                                ? 'Deleting...'
-                                : 'Delete'}
-                            </button>
-                          </div>
-
-                          {activity.body && (
-                            <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-base-content/80">
-                              {activity.body}
-                            </p>
-                          )}
-
-                          <div className="mt-4 grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
-                            {activity.contactPerson && (
-                              <div>
-                                <span className="text-base-content/60">
-                                  Contact:
-                                </span>{' '}
-                                {activity.contactPerson}
-                              </div>
-                            )}
-
-                            {activity.emailTo && (
-                              <div>
-                                <span className="text-base-content/60">
-                                  Email To:
-                                </span>{' '}
-                                {activity.emailTo}
-                              </div>
-                            )}
-
-                            {activity.emailSubject && (
-                              <div>
-                                <span className="text-base-content/60">
-                                  Subject:
-                                </span>{' '}
-                                {activity.emailSubject}
-                              </div>
-                            )}
-
-                            {activity.nextFollowUpAt && (
-                              <div>
-                                <span className="text-base-content/60">
-                                  Next Follow-up:
-                                </span>{' '}
-                                {formatDate(activity.nextFollowUpAt)}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <Pagination
-                    pagination={pagination}
-                    isLoading={isRefreshing || isLoading}
-                    onPageChange={handlePageChange}
-                    onLimitChange={handleLimitChange}
-                  />
-                </div>
               </div>
             </>
           )}

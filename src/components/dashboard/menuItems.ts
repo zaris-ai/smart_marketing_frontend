@@ -1,5 +1,8 @@
 import {
   AtSymbolIcon,
+  BriefcaseIcon,
+  EnvelopeIcon,
+  FunnelIcon,
   GlobeAltIcon,
   HashtagIcon,
   HomeIcon,
@@ -11,15 +14,25 @@ import {
   SignalIcon,
   UserMinusIcon,
   UsersIcon,
+  ClipboardDocumentCheckIcon,
+  CalendarDaysIcon,
+  ChartBarIcon
 } from "@heroicons/react/24/outline";
-import { IconBrandSpeedtest, IconBuildingStore, IconImageInPicture, IconMail, IconUpload, IconVideo } from "@tabler/icons-react";
+import {
+  IconBrandSpeedtest,
+  IconBuildingStore,
+  IconImageInPicture,
+  IconMail,
+  IconUpload,
+  IconVideo,
+} from "@tabler/icons-react";
 
 export interface MenuItem {
   label: string;
   href?: string;
   icon: React.ElementType;
   badge?: number;
-  section?: "top" | "seo" | "setting" | "crm" | "instagram";
+  section?: "top" | "seo" | "setting" | "users" | "instagram" | "crm";
 }
 
 export const menuItems: MenuItem[] = [
@@ -27,6 +40,12 @@ export const menuItems: MenuItem[] = [
     label: "Users",
     href: "/dashboard/users",
     icon: UsersIcon,
+    section: "setting",
+  },
+  {
+    label: "Marketing Capacity",
+    href: "/dashboard/marketing-capacity",
+    icon: BriefcaseIcon,
     section: "setting",
   },
   {
@@ -46,6 +65,36 @@ export const menuItems: MenuItem[] = [
     href: "/dashboard/emails",
     icon: IconMail,
     section: "setting",
+  },
+  {
+    label: 'Daily Planner',
+    href: '/dashboard/daily-planner',
+    icon: CalendarDaysIcon,
+    section: 'users',
+  },
+  {
+    label: 'My Tasks',
+    href: '/dashboard/my-tasks',
+    icon: ClipboardDocumentCheckIcon,
+    section: 'users',
+  },
+  {
+    label: "CRM Sales Funnel",
+    href: "/dashboard/crm-funnel",
+    icon: FunnelIcon,
+    section: "users",
+  },
+  {
+    label: "Email Templates",
+    href: "/dashboard/email-templates",
+    icon: EnvelopeIcon,
+    section: "users",
+  },
+  {
+    label: 'Employee Productivity',
+    href: '/dashboard/employee-productivity',
+    icon: ChartBarIcon,
+    section: 'users',
   },
   {
     label: "Dashboard",
@@ -120,21 +169,21 @@ export const menuItems: MenuItem[] = [
     section: "seo",
   },
   {
-    label: "stores",
+    label: "Stores",
     href: "/dashboard/stores",
     icon: IconBuildingStore,
     section: "setting",
   },
   {
-    label: "instagram story",
+    label: "Instagram Story",
     href: "/dashboard/instagram",
     icon: IconVideo,
     section: "instagram",
   },
   {
-    label: "instagram post",
+    label: "Instagram Post",
     href: "/dashboard/instagram_post",
     icon: IconImageInPicture,
     section: "instagram",
-  },
+  }
 ];

@@ -3,6 +3,7 @@
 // ============================================
 
 import '@/styles/globals.css';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
 import type { AppProps } from 'next/app';
 import { SessionProvider } from 'next-auth/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
